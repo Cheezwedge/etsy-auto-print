@@ -1,0 +1,29 @@
+# Copy this file to config.toml and fill in your values.
+# config.toml is gitignored — it holds your app keystring, so keep it private.
+
+[etsy]
+# From https://www.etsy.com/developers/your-apps after creating a personal app.
+keystring = "your-etsy-app-keystring"
+
+# Optional: your numeric shop id. If omitted it is auto-discovered from the
+# authenticated account on first use and cached in tokens.json.
+# shop_id = 12345678
+
+# The OAuth redirect is caught on http://localhost:<redirect_port>/callback.
+# Register that exact URL as a Callback URL in your Etsy app settings.
+redirect_port = 8231
+
+[poll]
+# How often `run` checks for new paid, unshipped orders.
+interval_seconds = 180
+
+[printer]
+# "file"  — write packing slips into the outbox directory (no printer needed)
+# "cups"  — send to a CUPS print queue via `lp` (once you have a printer)
+backend = "file"
+outbox = "outbox"
+# cups_queue = "label"   # required when backend = "cups"
+
+[paths]
+db = "orders.db"
+tokens = "tokens.json"

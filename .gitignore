@@ -1,0 +1,13 @@
+# Local secrets and state — never commit these
+config.toml
+tokens.json
+orders.db
+outbox/
+
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+.venv/
