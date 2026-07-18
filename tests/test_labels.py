@@ -27,6 +27,7 @@ def label_config(**overrides) -> LabelConfig:
             "state": "OR",
             "zip": "97201",
             "country": "US",
+            "email": "shop@example.com",
         },
         parcel={"length_in": 10, "width_in": 7, "height_in": 4, "packaging_oz": 3},
         item_weights_oz={"STAND-WAL": 9.5, "": 1.0},

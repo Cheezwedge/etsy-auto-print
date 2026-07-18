@@ -52,7 +52,9 @@ class Config:
         return f"http://localhost:{self.redirect_port}/callback"
 
 
-_SHIP_FROM_REQUIRED = ("name", "street1", "city", "state", "zip", "country")
+# email is on the required list because USPS (the default carrier) rejects
+# label purchases when the sender address has no contact email.
+_SHIP_FROM_REQUIRED = ("name", "street1", "city", "state", "zip", "country", "email")
 _PARCEL_REQUIRED = ("length_in", "width_in", "height_in", "packaging_oz")
 
 

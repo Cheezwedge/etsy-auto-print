@@ -45,6 +45,7 @@ file_type = "PDF_4x6"
 allowed_providers = ["USPS"]
 
 # Your return address (required when labels are enabled).
+# email is required: USPS rejects purchases without a sender contact email.
 [labels.ship_from]
 name = "Your Shop Name"
 street1 = "123 Your Street"
@@ -52,6 +53,7 @@ city = "Your City"
 state = "OR"
 zip = "97201"
 country = "US"
+email = "you@example.com"
 # phone = "555-555-5555"   # required by some carriers/services
 
 # The box every order ships in (single-box model for now).
