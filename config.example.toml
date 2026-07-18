@@ -27,3 +27,45 @@ outbox = "outbox"
 [paths]
 db = "orders.db"
 tokens = "tokens.json"
+
+# ---------------------------------------------------------------------------
+# Phase 2: automatic shipping label purchase via Shippo.
+# Leave enabled = false to run packing slips only (phase 1 behavior).
+
+[labels]
+enabled = false
+# Your Shippo API token. Use the TEST token (shippo_test_...) while developing:
+# test labels are free, fake, and printable. Real postage additionally
+# requires allow_live = true below — that's the safety interlock.
+shippo_token = ""
+allow_live = false
+# Label format: PDF_4x6 (default, prints anywhere), PNG, or ZPLII (Zebra raw)
+file_type = "PDF_4x6"
+# Only consider rates from these carriers; empty list = cheapest of any.
+allowed_providers = ["USPS"]
+
+# Your return address (required when labels are enabled).
+[labels.ship_from]
+name = "Your Shop Name"
+street1 = "123 Your Street"
+city = "Your City"
+state = "OR"
+zip = "97201"
+country = "US"
+# phone = "555-555-5555"   # required by some carriers/services
+
+# The box every order ships in (single-box model for now).
+# Weight sent to the carrier = packaging_oz + sum of item weights.
+[labels.parcel]
+length_in = 10.0
+width_in = 7.0
+height_in = 4.0
+packaging_oz = 3.0
+# Fallback per-item weight for SKUs not listed below. Omit this line to
+# instead HOLD any order containing an unmapped SKU (safer).
+# default_item_oz = 8.0
+
+# Per-SKU item weights in ounces.
+[labels.item_weights_oz]
+# "MUG-BLUE-12OZ" = 14.0
+# "STAND-WAL" = 9.5

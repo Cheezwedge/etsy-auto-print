@@ -23,6 +23,18 @@ class ConfigError(Exception):
 
 
 @dataclass
+class LabelConfig:
+    enabled: bool
+    token: str
+    allow_live: bool
+    file_type: str
+    ship_from: dict
+    parcel: dict
+    item_weights_oz: dict
+    allowed_providers: list
+
+
+@dataclass
 class Config:
     keystring: str
     shop_id: int | None
@@ -33,10 +45,44 @@ class Config:
     cups_queue: str | None
     db_path: Path
     tokens_path: Path
+    labels: LabelConfig
 
     @property
     def redirect_uri(self) -> str:
         return f"http://localhost:{self.redirect_port}/callback"
+
+
+_SHIP_FROM_REQUIRED = ("name", "street1", "city", "state", "zip", "country")
+_PARCEL_REQUIRED = ("length_in", "width_in", "height_in", "packaging_oz")
+
+
+def _load_labels(raw: dict) -> LabelConfig:
+    section = raw.get("labels", {})
+    enabled = bool(section.get("enabled", False))
+    token = section.get("shippo_token", "")
+    ship_from = section.get("ship_from", {})
+    parcel = section.get("parcel", {})
+
+    if enabled:
+        if not token:
+            raise ConfigError("labels.enabled is true but labels.shippo_token is not set")
+        missing = [k for k in _SHIP_FROM_REQUIRED if not ship_from.get(k)]
+        if missing:
+            raise ConfigError(f"[labels.ship_from] is missing: {', '.join(missing)}")
+        missing = [k for k in _PARCEL_REQUIRED if parcel.get(k) is None]
+        if missing:
+            raise ConfigError(f"[labels.parcel] is missing: {', '.join(missing)}")
+
+    return LabelConfig(
+        enabled=enabled,
+        token=token,
+        allow_live=bool(section.get("allow_live", False)),
+        file_type=section.get("file_type", "PDF_4x6"),
+        ship_from=ship_from,
+        parcel=parcel,
+        item_weights_oz=section.get("item_weights_oz", {}),
+        allowed_providers=list(section.get("allowed_providers", ["USPS"])),
+    )
 
 
 def load_config(path: str | Path | None = None) -> Config:
@@ -76,4 +122,5 @@ def load_config(path: str | Path | None = None) -> Config:
         cups_queue=cups_queue,
         db_path=base / paths.get("db", "orders.db"),
         tokens_path=base / paths.get("tokens", "tokens.json"),
+        labels=_load_labels(raw),
     )

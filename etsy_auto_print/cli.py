@@ -18,10 +18,12 @@ import time
 from datetime import datetime
 
 from .auth import AuthError, TokenStore, authorize
-from .config import ConfigError, load_config
+from .config import Config, ConfigError, load_config
 from .etsy import EtsyApiError, EtsyClient
-from .pipeline import poll_once, reprint
+from .labels import LabelError, Labeler, build_address_to, compute_parcel, pick_rate
+from .pipeline import advance_order, poll_once, reprint
 from .printer import get_printer
+from .shippo import ShippoError, make_client
 from .slip import render_packing_slip
 from .store import Store
 
@@ -57,6 +59,15 @@ def _build_client(config) -> EtsyClient:
     return EtsyClient(config, tokens)
 
 
+def _build_labeler(config: Config, store: Store, printer) -> Labeler | None:
+    if not config.labels.enabled:
+        return None
+    client = make_client(config.labels.token, config.labels.allow_live)
+    if client.is_test:
+        logging.info("Shippo TEST mode: labels are fake and free")
+    return Labeler(config.labels, store, printer, client)
+
+
 def cmd_auth(config, args) -> int:
     authorize(config, open_browser=not args.no_browser)
     client = _build_client(config)
@@ -69,8 +80,9 @@ def cmd_poll(config, args) -> int:
     client = _build_client(config)
     store = Store(config.db_path)
     printer = get_printer(config)
-    n = poll_once(client, store, printer)
-    print(f"Processed {n} new order(s).")
+    labeler = _build_labeler(config, store, printer)
+    n = poll_once(client, store, printer, labeler)
+    print(f"{n} order(s) made progress.")
     return 0
 
 
@@ -78,14 +90,16 @@ def cmd_run(config, args) -> int:
     client = _build_client(config)
     store = Store(config.db_path)
     printer = get_printer(config)
+    labeler = _build_labeler(config, store, printer)
     logging.info(
-        "Polling every %ss (printer backend: %s). Ctrl-C to stop.",
+        "Polling every %ss (printer: %s, labels: %s). Ctrl-C to stop.",
         config.poll_interval,
         config.printer_backend,
+        "on" if labeler else "off",
     )
     while True:
         try:
-            poll_once(client, store, printer)
+            poll_once(client, store, printer, labeler)
         except (EtsyApiError, AuthError) as exc:
             # Transient API failures shouldn't kill the service; the next
             # poll retries and nothing is lost (state lives in SQLite).
@@ -122,6 +136,14 @@ def cmd_show(config, args) -> int:
     print(f"Order #{row['receipt_id']}  state={row['state']}  buyer={row['buyer_name']}")
     if row["error"]:
         print(f"Held because: {row['error']}")
+    label = store.get_label(args.receipt_id)
+    if label:
+        test = " [TEST]" if label["is_test"] else ""
+        print(
+            f"Label: {label['carrier']} {label['service']} "
+            f"{label['amount']} {label['currency']}{test}\n"
+            f"Tracking: {label['tracking_number']}  {label['tracking_url']}"
+        )
     print("\nHistory:")
     for ev in store.events(args.receipt_id):
         at = datetime.fromtimestamp(ev["at"]).strftime("%Y-%m-%d %H:%M:%S")
@@ -148,6 +170,133 @@ def cmd_test_slip(config, args) -> int:
     printer = get_printer(config)
     destination = printer.print_text("packing-slip-SAMPLE", render_packing_slip(SAMPLE_RECEIPT))
     print(f"Sample slip -> {destination}")
+    return 0
+
+
+def cmd_retry(config, args) -> int:
+    """Re-run the pipeline for a held order after fixing the cause."""
+    store = Store(config.db_path)
+    printer = get_printer(config)
+    labeler = _build_labeler(config, store, printer)
+    receipt = store.get_receipt_json(args.receipt_id)
+    if receipt is None:
+        print(f"Order #{args.receipt_id} not found.", file=sys.stderr)
+        return 1
+    row = store.get(args.receipt_id)
+    if row["state"] == "held":
+        # Resume from the furthest completed step.
+        resume = "label_purchased" if store.get_label(args.receipt_id) else (
+            "slip_printed" if any(
+                e["to_state"] == "slip_printed" for e in store.events(args.receipt_id)
+            ) else "new"
+        )
+        store.transition(args.receipt_id, resume, "manual retry")
+    if advance_order(receipt, store, printer, labeler):
+        print(f"Order #{args.receipt_id} advanced to {store.get(args.receipt_id)['state']}.")
+        return 0
+    print(f"Order #{args.receipt_id} did not advance (state: {store.get(args.receipt_id)['state']}).")
+    return 1
+
+
+def cmd_reprint_label(config, args) -> int:
+    store = Store(config.db_path)
+    printer = get_printer(config)
+    labeler = _build_labeler(config, store, printer)
+    if labeler is None:
+        print("Labels are not enabled in config.toml.", file=sys.stderr)
+        return 1
+    if store.get_label(args.receipt_id) is None:
+        print(f"No purchased label for order #{args.receipt_id}.", file=sys.stderr)
+        return 1
+    labeler._print(args.receipt_id)
+    return 0
+
+
+def cmd_clear_attempt(config, args) -> int:
+    store = Store(config.db_path)
+    if not store.label_attempted(args.receipt_id):
+        print(f"No pending purchase attempt for order #{args.receipt_id}.")
+        return 0
+    store.clear_label_attempt(args.receipt_id)
+    print(
+        f"Cleared. Only do this after confirming in the Shippo dashboard that "
+        f"order #{args.receipt_id} was NOT charged."
+    )
+    return 0
+
+
+def cmd_quote(config, args) -> int:
+    """Show available rates for an order without buying anything."""
+    store = Store(config.db_path)
+    if not config.labels.enabled:
+        print("Labels are not enabled in config.toml.", file=sys.stderr)
+        return 1
+    receipt = store.get_receipt_json(args.receipt_id)
+    if receipt is None:
+        print(f"Order #{args.receipt_id} not found.", file=sys.stderr)
+        return 1
+    client = make_client(config.labels.token, config.labels.allow_live)
+    parcel = compute_parcel(receipt, config.labels)
+    shipment = client.create_shipment(
+        config.labels.ship_from, build_address_to(receipt), parcel
+    )
+    rates = shipment.get("rates", [])
+    if not rates:
+        print("No rates returned.")
+        return 1
+    chosen = pick_rate(rates, config.labels.allowed_providers)
+    print(f"Parcel: {parcel['weight']} oz  ({'TEST' if client.is_test else 'LIVE'})")
+    for r in sorted(rates, key=lambda r: float(r["amount"])):
+        mark = " <== would buy" if r["object_id"] == chosen["object_id"] else ""
+        days = f"~{r['estimated_days']}d" if r.get("estimated_days") else ""
+        print(
+            f"  {r['amount']:>7} {r['currency']}  {r['provider']:<6} "
+            f"{r.get('servicelevel', {}).get('name', ''):<28}{days}{mark}"
+        )
+    return 0
+
+
+SAMPLE_ADDRESS_TO = {
+    "name": "Shippo Test Recipient",
+    "street1": "215 Clayton St.",
+    "city": "San Francisco",
+    "state": "CA",
+    "zip": "94117",
+    "country": "US",
+}
+
+
+def cmd_test_label(config, args) -> int:
+    """Buy and print a TEST label end-to-end, without touching the order db."""
+    if not config.labels.enabled:
+        print("Labels are not enabled in config.toml.", file=sys.stderr)
+        return 1
+    client = make_client(config.labels.token, config.labels.allow_live)
+    if not client.is_test:
+        print("Refusing: test-label requires a shippo_test_ token.", file=sys.stderr)
+        return 1
+    printer = get_printer(config)
+    parcel = {
+        "length": config.labels.parcel["length_in"],
+        "width": config.labels.parcel["width_in"],
+        "height": config.labels.parcel["height_in"],
+        "distance_unit": "in",
+        "weight": config.labels.parcel["packaging_oz"] + 8,
+        "mass_unit": "oz",
+    }
+    shipment = client.create_shipment(config.labels.ship_from, SAMPLE_ADDRESS_TO, parcel)
+    rate = pick_rate(shipment.get("rates", []), config.labels.allowed_providers)
+    print(f"Buying TEST label: {rate['provider']} {rate['servicelevel']['name']} "
+          f"{rate['amount']} {rate['currency']}")
+    txn = client.buy_label(rate["object_id"], config.labels.file_type)
+    if txn.get("status") != "SUCCESS":
+        msgs = "; ".join(m.get("text", str(m)) for m in txn.get("messages", []))
+        print(f"Purchase failed: {msgs or txn.get('status')}", file=sys.stderr)
+        return 1
+    ext = {"ZPLII": "zpl", "PNG": "png"}.get(config.labels.file_type, "pdf")
+    destination = printer.print_bytes("label-TEST", client.download(txn["label_url"]), ext)
+    print(f"Tracking (test): {txn.get('tracking_number')}")
+    print(f"Label -> {destination}")
     return 0
 
 
@@ -178,6 +327,27 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("test-slip", help="print a sample slip with fake data").set_defaults(
         func=cmd_test_slip
     )
+    sub.add_parser("test-label", help="buy + print a Shippo TEST label").set_defaults(
+        func=cmd_test_label
+    )
+
+    p = sub.add_parser("retry", help="re-run the pipeline for a held order")
+    p.add_argument("receipt_id", type=int)
+    p.set_defaults(func=cmd_retry)
+
+    p = sub.add_parser("reprint-label", help="re-print an already-purchased label")
+    p.add_argument("receipt_id", type=int)
+    p.set_defaults(func=cmd_reprint_label)
+
+    p = sub.add_parser("quote", help="show shipping rates for an order (no purchase)")
+    p.add_argument("receipt_id", type=int)
+    p.set_defaults(func=cmd_quote)
+
+    p = sub.add_parser(
+        "clear-attempt", help="clear a stuck purchase-attempt marker (see docs first)"
+    )
+    p.add_argument("receipt_id", type=int)
+    p.set_defaults(func=cmd_clear_attempt)
 
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -185,7 +355,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         config = load_config(args.config)
         return args.func(config, args)
-    except (ConfigError, AuthError, EtsyApiError) as exc:
+    except (ConfigError, AuthError, EtsyApiError, LabelError, ShippoError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:

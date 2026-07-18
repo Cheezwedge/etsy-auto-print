@@ -48,6 +48,23 @@ CREATE TABLE IF NOT EXISTS events (
     to_state   TEXT NOT NULL,
     note       TEXT
 );
+CREATE TABLE IF NOT EXISTS labels (
+    receipt_id      INTEGER PRIMARY KEY,
+    object_id       TEXT,
+    carrier         TEXT,
+    service         TEXT,
+    amount          TEXT,
+    currency        TEXT,
+    tracking_number TEXT,
+    tracking_url    TEXT,
+    label_url       TEXT,
+    is_test         INTEGER NOT NULL DEFAULT 0,
+    created_at      REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS label_attempts (
+    receipt_id INTEGER PRIMARY KEY,
+    at         REAL NOT NULL
+);
 """
 
 
@@ -107,6 +124,53 @@ class Store:
 
     def hold(self, receipt_id: int, reason: str) -> None:
         self.transition(receipt_id, "held", reason)
+
+    # -- labels (phase 2) ---------------------------------------------------
+
+    def record_label_attempt(self, receipt_id: int) -> None:
+        self.conn.execute(
+            "INSERT OR REPLACE INTO label_attempts (receipt_id, at) VALUES (?, ?)",
+            (receipt_id, time.time()),
+        )
+        self.conn.commit()
+
+    def label_attempted(self, receipt_id: int) -> bool:
+        return (
+            self.conn.execute(
+                "SELECT 1 FROM label_attempts WHERE receipt_id = ?", (receipt_id,)
+            ).fetchone()
+            is not None
+        )
+
+    def clear_label_attempt(self, receipt_id: int) -> None:
+        self.conn.execute("DELETE FROM label_attempts WHERE receipt_id = ?", (receipt_id,))
+        self.conn.commit()
+
+    def save_label(self, receipt_id: int, **fields) -> None:
+        self.conn.execute(
+            "INSERT OR REPLACE INTO labels (receipt_id, object_id, carrier, service, "
+            "amount, currency, tracking_number, tracking_url, label_url, is_test, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                receipt_id,
+                fields.get("object_id", ""),
+                fields.get("carrier", ""),
+                fields.get("service", ""),
+                fields.get("amount", ""),
+                fields.get("currency", ""),
+                fields.get("tracking_number", ""),
+                fields.get("tracking_url", ""),
+                fields.get("label_url", ""),
+                int(fields.get("is_test", False)),
+                time.time(),
+            ),
+        )
+        self.conn.commit()
+
+    def get_label(self, receipt_id: int) -> sqlite3.Row | None:
+        return self.conn.execute(
+            "SELECT * FROM labels WHERE receipt_id = ?", (receipt_id,)
+        ).fetchone()
 
     def events(self, receipt_id: int) -> list[sqlite3.Row]:
         return self.conn.execute(

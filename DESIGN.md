@@ -109,9 +109,11 @@ fallback.
 
 1. **Read-only skeleton** — Etsy OAuth flow (one-time browser consent, refresh
    token stored locally), poll receipts, print *a plain-paper packing slip* to
-   prove the loop end-to-end with zero postage risk.
-2. **Label purchase behind a `--dry-run` flag** — Shippo test-mode labels,
-   print test PDFs, verify barcode scans and 4x6 layout on the real printer.
+   prove the loop end-to-end with zero postage risk. ✅ done
+2. **Label purchase in Shippo test mode** — test-mode labels (enforced: live
+   tokens refused unless `allow_live = true`), parcel presets by SKU, cheapest
+   allowed rate, print test labels, verify barcode scans and 4x6 layout on the
+   real printer. ✅ done (printer verification pending hardware)
 3. **Go live** — real postage, `createReceiptShipment`, failure notifications,
    systemd hardening (restart on failure, boot persistence).
 4. **Nice-to-haves** — packing slip alongside each label, `order.paid` webhook

@@ -1,9 +1,10 @@
 # etsy-auto-print
 
-Automatically process Etsy orders as they come in. **Currently at phase 1**
-(see [DESIGN.md](DESIGN.md)): polls your shop for paid, unshipped orders and
-prints a packing slip for each — exactly once. Later phases add automatic
-shipping-label purchase (via a postage API) and posting tracking back to Etsy.
+Automatically process Etsy orders as they come in. **Currently at phase 2**
+(see [DESIGN.md](DESIGN.md)): polls your shop for paid, unshipped orders,
+prints a packing slip for each, and — when enabled — buys a shipping label
+via Shippo and prints it too, exactly once per order. Phase 3 will post the
+tracking number back to Etsy to close the loop.
 
 No printer yet? The default `file` printer backend writes each slip into an
 `outbox/` folder so you can run the whole pipeline today; switching to a real
@@ -53,17 +54,46 @@ etsy-auto-print show 123    # details + event history for one order
 etsy-auto-print reprint 123 # re-print a slip (also un-holds a held order)
 ```
 
+### 5. Enable shipping labels (phase 2)
+
+1. Create a free Shippo account (Starter plan) and copy the **test** API
+   token from Settings → API (it starts with `shippo_test_`).
+2. In `config.toml`, set `[labels] enabled = true`, paste the token, fill in
+   your `[labels.ship_from]` address, your `[labels.parcel]` box size, and
+   per-SKU weights in `[labels.item_weights_oz]`.
+3. Verify the whole flow with fake labels (free, printable, scannable):
+
+```bash
+etsy-auto-print test-label      # buy + print a TEST label end to end
+etsy-auto-print quote 123       # show rates for a real order, buy nothing
+etsy-auto-print poll            # orders now advance: slip -> label
+etsy-auto-print reprint-label 123
+etsy-auto-print retry 123       # re-run a held order after fixing the cause
+```
+
+With the test token everything behaves like production except the labels are
+watermarked and free. Going live later is: switch to the live token, set
+`allow_live = true`, add a payment method at Shippo. Until `allow_live` is
+explicitly set, the program refuses live tokens — you cannot spend real
+money by accident.
+
 For always-on operation on a Raspberry Pi, see
 [systemd/etsy-auto-print.service](systemd/etsy-auto-print.service).
 
 ## How it stays safe
 
 - Every order lives in a local SQLite database (`orders.db`) with a state
-  machine (`new → slip_printed → … → done`, or `held`). An order is only
-  processed from the `new` state, so nothing is ever printed — or, in later
-  phases, *purchased* — twice.
+  machine (`new → slip_printed → label_purchased → label_printed → … → done`,
+  or `held`). Each step runs at most once per order — a label can never be
+  purchased twice.
+- A purchase *attempt* is recorded before money moves. If the process crashes
+  between charging Shippo and recording the result, the order is held with
+  instructions to check the Shippo dashboard — never silently re-bought
+  (`clear-attempt` resumes after you've verified).
+- Live Shippo tokens are refused unless `allow_live = true` is set: the
+  default configuration physically cannot spend money.
 - Anything that fails moves to `held` with a reason (`status` shows it) and
-  is retried only when you say so (`reprint`).
+  is retried only when you say so (`retry`).
 - Every state change is recorded in an audit trail (`show <id>`).
 
 ## When you buy a printer
