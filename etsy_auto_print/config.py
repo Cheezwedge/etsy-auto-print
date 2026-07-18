@@ -95,7 +95,14 @@ def load_config(path: str | Path | None = None) -> Config:
             "Copy config.example.toml to config.toml and fill in your keystring."
         )
     with open(cfg_path, "rb") as f:
-        raw = tomllib.load(f)
+        try:
+            raw = tomllib.load(f)
+        except tomllib.TOMLDecodeError as exc:
+            raise ConfigError(
+                f"{cfg_path} is not valid TOML: {exc}. "
+                "Common cause: a string value without quotes "
+                '(e.g. email = "you@example.com" needs the quotes).'
+            ) from exc
 
     base = cfg_path.resolve().parent
     etsy = raw.get("etsy", {})
