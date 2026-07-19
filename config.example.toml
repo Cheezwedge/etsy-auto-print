@@ -71,3 +71,11 @@ packaging_oz = 3.0
 [labels.item_weights_oz]
 # "MUG-BLUE-12OZ" = 14.0
 # "STAND-WAL" = 9.5
+
+# ---------------------------------------------------------------------------
+# Phase 3: get a push notification when an order is held and needs you.
+# Pick any hard-to-guess topic name and subscribe to it in the ntfy app
+# (https://ntfy.sh — free, no account needed) on your phone or browser.
+
+[notify]
+# ntfy_url = "https://ntfy.sh/your-secret-topic-name"

@@ -46,6 +46,7 @@ class Config:
     db_path: Path
     tokens_path: Path
     labels: LabelConfig
+    ntfy_url: str | None
 
     @property
     def redirect_uri(self) -> str:
@@ -132,4 +133,5 @@ def load_config(path: str | Path | None = None) -> Config:
         db_path=base / paths.get("db", "orders.db"),
         tokens_path=base / paths.get("tokens", "tokens.json"),
         labels=_load_labels(raw),
+        ntfy_url=raw.get("notify", {}).get("ntfy_url") or None,
     )

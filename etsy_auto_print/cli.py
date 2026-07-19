@@ -21,6 +21,7 @@ from .auth import AuthError, TokenStore, authorize
 from .config import Config, ConfigError, load_config
 from .etsy import EtsyApiError, EtsyClient
 from .labels import LabelError, Labeler, build_address_to, compute_parcel, pick_rate
+from .notify import Notifier
 from .pipeline import advance_order, poll_once, reprint
 from .printer import get_printer
 from .shippo import ShippoError, make_client
@@ -81,7 +82,7 @@ def cmd_poll(config, args) -> int:
     store = Store(config.db_path)
     printer = get_printer(config)
     labeler = _build_labeler(config, store, printer)
-    n = poll_once(client, store, printer, labeler)
+    n = poll_once(client, store, printer, labeler, Notifier(config.ntfy_url))
     print(f"{n} order(s) made progress.")
     return 0
 
@@ -91,15 +92,17 @@ def cmd_run(config, args) -> int:
     store = Store(config.db_path)
     printer = get_printer(config)
     labeler = _build_labeler(config, store, printer)
+    notifier = Notifier(config.ntfy_url)
     logging.info(
-        "Polling every %ss (printer: %s, labels: %s). Ctrl-C to stop.",
+        "Polling every %ss (printer: %s, labels: %s, notify: %s). Ctrl-C to stop.",
         config.poll_interval,
         config.printer_backend,
         "on" if labeler else "off",
+        "ntfy" if config.ntfy_url else "log only",
     )
     while True:
         try:
-            poll_once(client, store, printer, labeler)
+            poll_once(client, store, printer, labeler, notifier)
         except (EtsyApiError, AuthError) as exc:
             # Transient API failures shouldn't kill the service; the next
             # poll retries and nothing is lost (state lives in SQLite).
@@ -173,6 +176,17 @@ def cmd_test_slip(config, args) -> int:
     return 0
 
 
+def cmd_test_notify(config, args) -> int:
+    if not config.ntfy_url:
+        print("notify.ntfy_url is not set in config.toml.", file=sys.stderr)
+        return 1
+    Notifier(config.ntfy_url).send(
+        "etsy-auto-print test", "Notifications are working. This is a test."
+    )
+    print(f"Sent a test notification to {config.ntfy_url}")
+    return 0
+
+
 def cmd_retry(config, args) -> int:
     """Re-run the pipeline for a held order after fixing the cause."""
     store = Store(config.db_path)
@@ -185,13 +199,21 @@ def cmd_retry(config, args) -> int:
     row = store.get(args.receipt_id)
     if row["state"] == "held":
         # Resume from the furthest completed step.
-        resume = "label_purchased" if store.get_label(args.receipt_id) else (
-            "slip_printed" if any(
-                e["to_state"] == "slip_printed" for e in store.events(args.receipt_id)
-            ) else "new"
-        )
+        events = [e["to_state"] for e in store.events(args.receipt_id)]
+        if "label_printed" in events and store.get_label(args.receipt_id):
+            resume = "label_printed"
+        elif store.get_label(args.receipt_id):
+            resume = "label_purchased"
+        elif "slip_printed" in events:
+            resume = "slip_printed"
+        else:
+            resume = "new"
         store.transition(args.receipt_id, resume, "manual retry")
-    if advance_order(receipt, store, printer, labeler):
+    try:
+        etsy = _build_client(config)
+    except AuthError:
+        etsy = None  # slip/label steps still work without Etsy auth
+    if advance_order(receipt, store, printer, labeler, etsy, Notifier(config.ntfy_url)):
         print(f"Order #{args.receipt_id} advanced to {store.get(args.receipt_id)['state']}.")
         return 0
     print(f"Order #{args.receipt_id} did not advance (state: {store.get(args.receipt_id)['state']}).")
@@ -329,6 +351,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     sub.add_parser("test-label", help="buy + print a Shippo TEST label").set_defaults(
         func=cmd_test_label
+    )
+    sub.add_parser("test-notify", help="send a test ntfy notification").set_defaults(
+        func=cmd_test_notify
     )
 
     p = sub.add_parser("retry", help="re-run the pipeline for a held order")

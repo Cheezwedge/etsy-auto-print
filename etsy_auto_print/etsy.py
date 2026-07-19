@@ -74,3 +74,17 @@ class EtsyClient:
 
     def get_receipt(self, receipt_id: int) -> dict:
         return self._request("GET", f"/shops/{self.shop_id}/receipts/{receipt_id}")
+
+    def create_receipt_shipment(
+        self, receipt_id: int, tracking_code: str, carrier_name: str, send_bcc: bool = True
+    ) -> dict:
+        """Post tracking to Etsy: marks the order shipped and emails the buyer."""
+        return self._request(
+            "POST",
+            f"/shops/{self.shop_id}/receipts/{receipt_id}/tracking",
+            json={
+                "tracking_code": tracking_code,
+                "carrier_name": carrier_name,
+                "send_bcc": send_bcc,
+            },
+        )

@@ -1,10 +1,14 @@
 # etsy-auto-print
 
-Automatically process Etsy orders as they come in. **Currently at phase 2**
-(see [DESIGN.md](DESIGN.md)): polls your shop for paid, unshipped orders,
-prints a packing slip for each, and — when enabled — buys a shipping label
-via Shippo and prints it too, exactly once per order. Phase 3 will post the
-tracking number back to Etsy to close the loop.
+Automatically process Etsy orders as they come in (see [DESIGN.md](DESIGN.md)):
+polls your shop for paid, unshipped orders, prints a packing slip, buys a
+shipping label via Shippo and prints it, then posts the tracking number back
+to Etsy — which marks the order shipped and emails your buyer. Exactly once
+per order, with every failure held for review (and pushed to your phone via
+ntfy if configured) instead of guessed at.
+
+The full loop is: **order placed → slip + prepaid label printed → order
+marked shipped with tracking — hands off.**
 
 No printer yet? The default `file` printer backend writes each slip into an
 `outbox/` folder so you can run the whole pipeline today; switching to a real
@@ -72,10 +76,32 @@ etsy-auto-print retry 123       # re-run a held order after fixing the cause
 ```
 
 With the test token everything behaves like production except the labels are
-watermarked and free. Going live later is: switch to the live token, set
-`allow_live = true`, add a payment method at Shippo. Until `allow_live` is
-explicitly set, the program refuses live tokens — you cannot spend real
-money by accident.
+watermarked and free, and **tracking is never posted to Etsy for a test
+label** (fake tracking must not reach a real buyer) — test-labeled orders
+stop at `label_printed`. Until `allow_live` is explicitly set, the program
+refuses live tokens — you cannot spend real money by accident.
+
+### 6. Notifications (recommended before going live)
+
+Held orders should reach your phone. Install the free [ntfy](https://ntfy.sh)
+app, subscribe to a hard-to-guess topic name, then:
+
+```toml
+[notify]
+ntfy_url = "https://ntfy.sh/your-secret-topic-name"
+```
+
+```bash
+etsy-auto-print test-notify   # should pop up on your phone
+```
+
+### 7. Going live
+
+1. In Shippo: add a payment method, copy the **live** token.
+2. In `config.toml`: paste the live token and set `allow_live = true`.
+3. Restart `run`. From now on labels cost real postage and each completed
+   order is marked shipped on Etsy with tracking (buyer gets Etsy's normal
+   shipping-notification email).
 
 For always-on operation on a Raspberry Pi, see
 [systemd/etsy-auto-print.service](systemd/etsy-auto-print.service).

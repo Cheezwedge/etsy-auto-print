@@ -115,7 +115,10 @@ fallback.
    allowed rate, print test labels, verify barcode scans and 4x6 layout on the
    real printer. ✅ done (printer verification pending hardware)
 3. **Go live** — real postage, `createReceiptShipment`, failure notifications,
-   systemd hardening (restart on failure, boot persistence).
+   systemd hardening (restart on failure, boot persistence). ✅ code done —
+   tracking posts for live labels only (test labels stop at `label_printed`),
+   held orders push to ntfy; flipping live needs only the live token +
+   `allow_live = true`.
 4. **Nice-to-haves** — packing slip alongside each label, `order.paid` webhook
    via Cloudflare Tunnel, daily summary email, SCAN-form (end-of-day manifest)
    generation.
