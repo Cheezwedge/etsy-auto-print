@@ -55,3 +55,27 @@ def test_reprint_unholds(store, printer, receipt):
 def test_reprint_unknown_order(store, printer):
     with pytest.raises(KeyError):
         reprint(999, store, printer)
+
+
+def test_cups_backend_splits_slips_from_labels(tmp_path):
+    from etsy_auto_print.config import load_config
+    from etsy_auto_print.printer import CupsPrinter, FilePrinter, SplitPrinter, get_printer
+
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text(
+        '[etsy]\nkeystring = "k"\n'
+        '[printer]\nbackend = "cups"\ncups_queue = "label"\n'
+    )
+    printer = get_printer(load_config(cfg_file))
+    assert isinstance(printer, SplitPrinter)
+    assert isinstance(printer.label_printer, CupsPrinter)
+    assert isinstance(printer.slip_printer, FilePrinter)  # no slip_queue set
+
+    cfg_file.write_text(
+        '[etsy]\nkeystring = "k"\n'
+        '[printer]\nbackend = "cups"\ncups_queue = "label"\nslip_queue = "paper"\n'
+    )
+    printer = get_printer(load_config(cfg_file))
+    assert isinstance(printer.slip_printer, CupsPrinter)
+    assert printer.slip_printer.queue == "paper"
+    assert printer.label_printer.queue == "label"

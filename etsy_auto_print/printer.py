@@ -65,7 +65,28 @@ class CupsPrinter(Printer):
         return self._lp(name, data, raw=(ext == "zpl"))
 
 
+class SplitPrinter(Printer):
+    """Slips and labels can go to different places: a raw ZPL label queue
+    can't render plain text, so slips route to a second queue or the outbox."""
+
+    def __init__(self, slip_printer: Printer, label_printer: Printer):
+        self.slip_printer = slip_printer
+        self.label_printer = label_printer
+
+    def print_text(self, name: str, content: str) -> str:
+        return self.slip_printer.print_text(name, content)
+
+    def print_bytes(self, name: str, data: bytes, ext: str) -> str:
+        return self.label_printer.print_bytes(name, data, ext)
+
+
 def get_printer(config: Config) -> Printer:
     if config.printer_backend == "cups":
-        return CupsPrinter(config.cups_queue)
+        label_printer = CupsPrinter(config.cups_queue)
+        if config.slip_queue:
+            slip_printer: Printer = CupsPrinter(config.slip_queue)
+        else:
+            # No separate slip printer: keep slips as files in the outbox.
+            slip_printer = FilePrinter(config.outbox)
+        return SplitPrinter(slip_printer, label_printer)
     return FilePrinter(config.outbox)

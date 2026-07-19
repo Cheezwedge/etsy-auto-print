@@ -43,6 +43,7 @@ class Config:
     printer_backend: str
     outbox: Path
     cups_queue: str | None
+    slip_queue: str | None
     db_path: Path
     tokens_path: Path
     labels: LabelConfig
@@ -130,6 +131,7 @@ def load_config(path: str | Path | None = None) -> Config:
         printer_backend=backend,
         outbox=base / printer.get("outbox", "outbox"),
         cups_queue=cups_queue,
+        slip_queue=printer.get("slip_queue"),
         db_path=base / paths.get("db", "orders.db"),
         tokens_path=base / paths.get("tokens", "tokens.json"),
         labels=_load_labels(raw),

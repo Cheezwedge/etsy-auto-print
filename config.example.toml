@@ -22,7 +22,10 @@ interval_seconds = 180
 # "cups"  — send to a CUPS print queue via `lp` (once you have a printer)
 backend = "file"
 outbox = "outbox"
-# cups_queue = "label"   # required when backend = "cups"
+# cups_queue = "label"   # label queue, required when backend = "cups"
+# slip_queue = "paper"   # optional second queue for packing slips (a regular
+#                        # printer). If unset, slips stay in the outbox —
+#                        # a raw ZPL label queue can't print plain text.
 
 [paths]
 db = "orders.db"

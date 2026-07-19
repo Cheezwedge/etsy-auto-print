@@ -103,8 +103,8 @@ etsy-auto-print test-notify   # should pop up on your phone
    order is marked shipped on Etsy with tracking (buyer gets Etsy's normal
    shipping-notification email).
 
-For always-on operation on a Raspberry Pi, see
-[systemd/etsy-auto-print.service](systemd/etsy-auto-print.service).
+For always-on operation on a Raspberry Pi, follow the full step-by-step
+guide in [docs/RASPBERRY_PI.md](docs/RASPBERRY_PI.md).
 
 ## How it stays safe
 
