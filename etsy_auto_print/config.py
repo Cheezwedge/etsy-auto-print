@@ -50,6 +50,8 @@ class Config:
     tokens_path: Path
     labels: LabelConfig
     ntfy_url: str | None
+    pushover_user_key: str | None
+    pushover_api_token: str | None
 
     @property
     def redirect_uri(self) -> str:
@@ -153,4 +155,6 @@ def load_config(path: str | Path | None = None) -> Config:
         tokens_path=base / paths.get("tokens", "tokens.json"),
         labels=_load_labels(raw),
         ntfy_url=raw.get("notify", {}).get("ntfy_url") or None,
+        pushover_user_key=raw.get("notify", {}).get("pushover_user_key") or None,
+        pushover_api_token=raw.get("notify", {}).get("pushover_api_token") or None,
     )

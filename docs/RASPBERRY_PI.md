@@ -132,12 +132,25 @@ Check the barcode scans with any phone barcode-scanner app.
 
 ## 7. Notifications
 
+Either or both channels below may be configured — every configured channel
+gets every alert.
+
+**ntfy (free, no account):**
 ```toml
 [notify]
 ntfy_url = "https://ntfy.sh/some-long-random-topic-name"
 ```
+Install the ntfy app on your phone, subscribe to the same topic name.
 
-Install the ntfy app on your phone, subscribe to the same topic, then:
+**Pushover ($5 one-time per platform, private):**
+```toml
+[notify]
+pushover_user_key = "your-pushover-user-key"      # from your pushover.net dashboard
+pushover_api_token = "your-pushover-app-api-token" # from pushover.net/apps/build
+```
+Install the Pushover app, log into your account.
+
+Then test whichever you configured:
 
 ```bash
 .venv/bin/etsy-auto-print test-notify

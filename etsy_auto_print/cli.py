@@ -69,6 +69,10 @@ def _build_labeler(config: Config, store: Store, printer) -> Labeler | None:
     return Labeler(config.labels, store, printer, client)
 
 
+def _build_notifier(config: Config) -> Notifier:
+    return Notifier(config.ntfy_url, config.pushover_user_key, config.pushover_api_token)
+
+
 def cmd_auth(config, args) -> int:
     authorize(config, open_browser=not args.no_browser)
     client = _build_client(config)
@@ -82,7 +86,7 @@ def cmd_poll(config, args) -> int:
     store = Store(config.db_path)
     printer = get_printer(config)
     labeler = _build_labeler(config, store, printer)
-    n = poll_once(client, store, printer, labeler, Notifier(config.ntfy_url))
+    n = poll_once(client, store, printer, labeler, _build_notifier(config))
     print(f"{n} order(s) made progress.")
     return 0
 
@@ -92,13 +96,19 @@ def cmd_run(config, args) -> int:
     store = Store(config.db_path)
     printer = get_printer(config)
     labeler = _build_labeler(config, store, printer)
-    notifier = Notifier(config.ntfy_url)
+    notifier = _build_notifier(config)
+    notify_channels = ", ".join(
+        c for c in (
+            "ntfy" if config.ntfy_url else None,
+            "Pushover" if config.pushover_user_key and config.pushover_api_token else None,
+        ) if c
+    ) or "log only"
     logging.info(
         "Polling every %ss (printer: %s, labels: %s, notify: %s). Ctrl-C to stop.",
         config.poll_interval,
         config.printer_backend,
         "on" if labeler else "off",
-        "ntfy" if config.ntfy_url else "log only",
+        notify_channels,
     )
     while True:
         try:
@@ -177,13 +187,21 @@ def cmd_test_slip(config, args) -> int:
 
 
 def cmd_test_notify(config, args) -> int:
-    if not config.ntfy_url:
-        print("notify.ntfy_url is not set in config.toml.", file=sys.stderr)
+    if not config.ntfy_url and not (config.pushover_user_key and config.pushover_api_token):
+        print(
+            "No notification channel is configured — set notify.ntfy_url and/or "
+            "notify.pushover_user_key + notify.pushover_api_token in config.toml.",
+            file=sys.stderr,
+        )
         return 1
-    Notifier(config.ntfy_url).send(
-        "etsy-auto-print test", "Notifications are working. This is a test."
+    _build_notifier(config).send("etsy-auto-print test", "Notifications are working. This is a test.")
+    channels = ", ".join(
+        c for c in (
+            "ntfy" if config.ntfy_url else None,
+            "Pushover" if config.pushover_user_key and config.pushover_api_token else None,
+        ) if c
     )
-    print(f"Sent a test notification to {config.ntfy_url}")
+    print(f"Sent a test notification via: {channels}")
     return 0
 
 
@@ -213,7 +231,7 @@ def cmd_retry(config, args) -> int:
         etsy = _build_client(config)
     except AuthError:
         etsy = None  # slip/label steps still work without Etsy auth
-    if advance_order(receipt, store, printer, labeler, etsy, Notifier(config.ntfy_url)):
+    if advance_order(receipt, store, printer, labeler, etsy, _build_notifier(config)):
         print(f"Order #{args.receipt_id} advanced to {store.get(args.receipt_id)['state']}.")
         return 0
     print(f"Order #{args.receipt_id} did not advance (state: {store.get(args.receipt_id)['state']}).")

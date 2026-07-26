@@ -85,4 +85,12 @@ packaging_oz = 3.0
 # (https://ntfy.sh — free, no account needed) on your phone or browser.
 
 [notify]
+# Either or both may be set — every configured channel gets every alert.
+# ntfy.sh: https://ntfy.sh/your-secret-topic-name (pick a hard-to-guess name;
+# ntfy.sh is a public server, so the topic name is effectively a password).
 # ntfy_url = "https://ntfy.sh/your-secret-topic-name"
+
+# Pushover: pushover.net -> your dashboard for the user key, and
+# pushover.net/apps/build to create an application for the api token.
+# pushover_user_key = "your-pushover-user-key"
+# pushover_api_token = "your-pushover-app-api-token"
