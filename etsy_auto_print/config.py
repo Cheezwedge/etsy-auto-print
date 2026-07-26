@@ -37,6 +37,7 @@ class LabelConfig:
 @dataclass
 class Config:
     keystring: str
+    shared_secret: str
     shop_id: int | None
     redirect_port: int
     poll_interval: int
@@ -52,6 +53,12 @@ class Config:
     @property
     def redirect_uri(self) -> str:
         return f"http://localhost:{self.redirect_port}/callback"
+
+    @property
+    def api_key(self) -> str:
+        # Etsy requires "keystring:shared_secret" in x-api-key as of Feb 9 2026
+        # (previously the keystring alone was sufficient).
+        return f"{self.keystring}:{self.shared_secret}"
 
 
 # email is on the required list because USPS (the default carrier) rejects
@@ -116,6 +123,14 @@ def load_config(path: str | Path | None = None) -> Config:
     if not keystring or keystring == "your-etsy-app-keystring":
         raise ConfigError("Set etsy.keystring in config.toml to your Etsy app keystring.")
 
+    shared_secret = etsy.get("shared_secret", "")
+    if not shared_secret or shared_secret == "your-etsy-app-shared-secret":
+        raise ConfigError(
+            "Set etsy.shared_secret in config.toml to your Etsy app's shared secret "
+            "(from the same Your Apps page as the keystring). Etsy now rejects API "
+            "requests that don't include it."
+        )
+
     backend = printer.get("backend", "file")
     if backend not in ("file", "cups"):
         raise ConfigError(f"printer.backend must be 'file' or 'cups', got {backend!r}")
@@ -125,6 +140,7 @@ def load_config(path: str | Path | None = None) -> Config:
 
     return Config(
         keystring=keystring,
+        shared_secret=shared_secret,
         shop_id=etsy.get("shop_id"),
         redirect_port=int(etsy.get("redirect_port", 8231)),
         poll_interval=int(poll.get("interval_seconds", 180)),

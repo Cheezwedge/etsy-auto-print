@@ -63,7 +63,7 @@ def test_cups_backend_splits_slips_from_labels(tmp_path):
 
     cfg_file = tmp_path / "config.toml"
     cfg_file.write_text(
-        '[etsy]\nkeystring = "k"\n'
+        '[etsy]\nkeystring = "k"\nshared_secret = "s"\n'
         '[printer]\nbackend = "cups"\ncups_queue = "label"\n'
     )
     printer = get_printer(load_config(cfg_file))
@@ -72,7 +72,7 @@ def test_cups_backend_splits_slips_from_labels(tmp_path):
     assert isinstance(printer.slip_printer, FilePrinter)  # no slip_queue set
 
     cfg_file.write_text(
-        '[etsy]\nkeystring = "k"\n'
+        '[etsy]\nkeystring = "k"\nshared_secret = "s"\n'
         '[printer]\nbackend = "cups"\ncups_queue = "label"\nslip_queue = "paper"\n'
     )
     printer = get_printer(load_config(cfg_file))

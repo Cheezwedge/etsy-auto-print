@@ -2,8 +2,12 @@
 # config.toml is gitignored — it holds your app keystring, so keep it private.
 
 [etsy]
-# From https://www.etsy.com/developers/your-apps after creating a personal app.
+# Both values are on the same "Your Apps" page after creating a personal app:
+# https://www.etsy.com/developers/your-apps
+# Etsy requires both in every API request (as of Feb 9 2026) — the keystring
+# alone is no longer enough.
 keystring = "your-etsy-app-keystring"
+shared_secret = "your-etsy-app-shared-secret"
 
 # Optional: your numeric shop id. If omitted it is auto-discovered from the
 # authenticated account on first use and cached in tokens.json.

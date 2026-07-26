@@ -24,7 +24,7 @@ class EtsyClient:
 
     def _request(self, method: str, path: str, *, retry_auth: bool = True, **kwargs) -> dict:
         headers = {
-            "x-api-key": self.config.keystring,
+            "x-api-key": self.config.api_key,
             "Authorization": f"Bearer {self.tokens.access_token()}",
         }
         resp = requests.request(method, f"{API_BASE}{path}", headers=headers, timeout=30, **kwargs)

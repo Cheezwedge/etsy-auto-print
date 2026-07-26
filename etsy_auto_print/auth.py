@@ -90,6 +90,7 @@ class TokenStore:
                 "client_id": self.config.keystring,
                 "refresh_token": self._data["refresh_token"],
             },
+            headers={"x-api-key": self.config.api_key},
             timeout=30,
         )
         if resp.status_code != 200:
@@ -179,6 +180,7 @@ def authorize(config: Config, open_browser: bool = True) -> TokenStore:
             "code": result["code"],
             "code_verifier": verifier,
         },
+        headers={"x-api-key": config.api_key},
         timeout=30,
     )
     if resp.status_code != 200:

@@ -20,7 +20,8 @@ printer later is a two-line config change.
 
 1. Go to <https://www.etsy.com/developers/your-apps> and create a new app
    (a personal app for your own shop is fine).
-2. Note the **keystring** (API key).
+2. Note the **keystring** and **shared secret** (both on the same page — Etsy
+   requires both in every API request as of Feb 9 2026).
 3. Add a **Callback URL** of exactly `http://localhost:8231/callback`
    (or another port — just match `redirect_port` in your config).
 4. New apps start in "pending" state with provisional access, which is enough
@@ -33,7 +34,7 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
 cp config.example.toml config.toml
-# edit config.toml: set etsy.keystring
+# edit config.toml: set etsy.keystring and etsy.shared_secret
 ```
 
 ### 3. Authorize (one time)
