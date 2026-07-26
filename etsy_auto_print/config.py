@@ -30,9 +30,18 @@ class LabelConfig:
     allow_live: bool
     file_type: str
     ship_from: dict
-    parcel: dict
+    parcels: dict  # preset name -> box dims/packaging_oz
+    item_parcels: dict  # SKU -> preset name
+    default_parcel: str | None
     item_weights_oz: dict
     allowed_providers: list
+
+    @property
+    def parcel(self) -> dict:
+        """The single/primary box preset — for commands that just need *a*
+        representative parcel (e.g. test-label) rather than per-order logic."""
+        name = self.default_parcel or next(iter(self.parcels))
+        return self.parcels[name]
 
 
 @dataclass
@@ -70,12 +79,28 @@ _SHIP_FROM_REQUIRED = ("name", "street1", "city", "state", "zip", "country", "em
 _PARCEL_REQUIRED = ("length_in", "width_in", "height_in", "packaging_oz")
 
 
+def _load_parcels(section: dict) -> tuple[dict, dict, str | None]:
+    """Normalizes the config's box setup to (parcels, item_parcels, default_parcel).
+
+    Two supported shapes:
+    - New: [labels.parcels.<name>] tables (one per box size) + optional
+      [labels.item_parcels] (SKU -> preset name) + labels.default_parcel.
+    - Old: a single [labels.parcel] table, used for every order regardless
+      of contents. Normalized into one preset named "default" so the rest
+      of the code only has to handle the multi-preset shape.
+    """
+    parcels_raw = section.get("parcels")
+    if parcels_raw:
+        return dict(parcels_raw), dict(section.get("item_parcels", {})), section.get("default_parcel")
+    return {"default": dict(section.get("parcel", {}))}, {}, "default"
+
+
 def _load_labels(raw: dict) -> LabelConfig:
     section = raw.get("labels", {})
     enabled = bool(section.get("enabled", False))
     token = section.get("shippo_token", "")
     ship_from = section.get("ship_from", {})
-    parcel = section.get("parcel", {})
+    parcels, item_parcels, default_parcel = _load_parcels(section)
 
     if enabled:
         if not token:
@@ -83,9 +108,21 @@ def _load_labels(raw: dict) -> LabelConfig:
         missing = [k for k in _SHIP_FROM_REQUIRED if not ship_from.get(k)]
         if missing:
             raise ConfigError(f"[labels.ship_from] is missing: {', '.join(missing)}")
-        missing = [k for k in _PARCEL_REQUIRED if parcel.get(k) is None]
-        if missing:
-            raise ConfigError(f"[labels.parcel] is missing: {', '.join(missing)}")
+        if not any(parcels.values()):
+            raise ConfigError(
+                "No parcel/box size configured — set [labels.parcel] (single box) "
+                "or [labels.parcels.<name>] (multiple box sizes)."
+            )
+        for name, box in parcels.items():
+            missing = [k for k in _PARCEL_REQUIRED if box.get(k) is None]
+            if missing:
+                where = "[labels.parcel]" if name == "default" and "parcels" not in section else f"[labels.parcels.{name}]"
+                raise ConfigError(f"{where} is missing: {', '.join(missing)}")
+        if default_parcel and default_parcel not in parcels:
+            raise ConfigError(
+                f"labels.default_parcel = {default_parcel!r} but no such preset in "
+                f"[labels.parcels] (have: {', '.join(parcels)})"
+            )
 
     return LabelConfig(
         enabled=enabled,
@@ -93,7 +130,9 @@ def _load_labels(raw: dict) -> LabelConfig:
         allow_live=bool(section.get("allow_live", False)),
         file_type=section.get("file_type", "PDF_4x6"),
         ship_from=ship_from,
-        parcel=parcel,
+        parcels=parcels,
+        item_parcels=item_parcels,
+        default_parcel=default_parcel,
         item_weights_oz=section.get("item_weights_oz", {}),
         allowed_providers=list(section.get("allowed_providers", ["USPS"])),
     )

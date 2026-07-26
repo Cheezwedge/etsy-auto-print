@@ -63,8 +63,9 @@ country = "US"
 email = "you@example.com"
 # phone = "555-555-5555"   # required by some carriers/services
 
-# The box every order ships in (single-box model for now).
-# Weight sent to the carrier = packaging_oz + sum of item weights.
+# --- Option A: one box for every order (simplest — use this if everything
+# you sell fits comfortably in one box size). Weight sent to the carrier =
+# packaging_oz + sum of item weights.
 [labels.parcel]
 length_in = 10.0
 width_in = 7.0
@@ -74,7 +75,42 @@ packaging_oz = 3.0
 # instead HOLD any order containing an unmapped SKU (safer).
 # default_item_oz = 8.0
 
-# Per-SKU item weights in ounces.
+# --- Option B: multiple box sizes, chosen per order by what's in it.
+# Delete [labels.parcel] above and uncomment this block instead — the two
+# options are mutually exclusive (parcels, if present, wins).
+#
+# Each SKU maps to a named preset in [labels.item_parcels]. An order with
+# items from more than one preset ships in the single LARGEST of them (by
+# volume) — weight still sums every item into that one box. A SKU with no
+# mapping falls back to default_parcel, or gets HELD for review if that's
+# also unset.
+#
+# default_parcel = "medium"
+#
+# [labels.parcels.small]
+# length_in = 6.0
+# width_in = 4.0
+# height_in = 2.0
+# packaging_oz = 1.0
+#
+# [labels.parcels.medium]
+# length_in = 10.0
+# width_in = 7.0
+# height_in = 4.0
+# packaging_oz = 3.0
+#
+# [labels.parcels.large]
+# length_in = 14.0
+# width_in = 10.0
+# height_in = 6.0
+# packaging_oz = 5.0
+#
+# [labels.item_parcels]
+# "STICKER-PACK" = "small"
+# "MUG-BLUE-12OZ" = "medium"
+# "LARGE-VASE" = "large"
+
+# Per-SKU item weights in ounces (used regardless of which box option above).
 [labels.item_weights_oz]
 # "MUG-BLUE-12OZ" = 14.0
 # "STAND-WAL" = 9.5

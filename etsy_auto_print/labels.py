@@ -44,20 +44,57 @@ def build_address_to(receipt: dict) -> dict:
     }
 
 
+def _preset_for_sku(sku: str, title: str, label_config) -> str:
+    name = label_config.item_parcels.get(sku) or label_config.default_parcel
+    if name is None:
+        if len(label_config.parcels) == 1:
+            return next(iter(label_config.parcels))
+        raise LabelError(
+            f"no box size configured for SKU {sku!r} ({title}) — "
+            "add it to [labels.item_parcels] or set labels.default_parcel"
+        )
+    if name not in label_config.parcels:
+        raise LabelError(f"SKU {sku!r} ({title}) maps to unknown parcel preset {name!r}")
+    return name
+
+
+def _volume(box: dict) -> float:
+    return box["length_in"] * box["width_in"] * box["height_in"]
+
+
 def compute_parcel(receipt: dict, label_config) -> dict:
-    """One box per order: configured box dims, weight = packaging + items."""
-    box = label_config.parcel
-    total_oz = box["packaging_oz"]
-    for txn in receipt.get("transactions", []):
+    """One box per order. Each item is mapped to a parcel preset (by SKU, or
+    the shop's default/only preset); if an order mixes items that map to
+    different presets, everything ships in the single largest one by volume.
+    Weight sums every item's own weight into that box."""
+    transactions = receipt.get("transactions", [])
+    presets_used: set[str] = set()
+    item_weight_total = 0.0
+
+    for txn in transactions:
         sku = txn.get("sku") or ""
         qty = txn.get("quantity", 1)
-        weight = label_config.item_weights_oz.get(sku, box.get("default_item_oz"))
+        title = txn.get("title", "?")[:40]
+
+        preset_name = _preset_for_sku(sku, title, label_config)
+        presets_used.add(preset_name)
+
+        preset = label_config.parcels[preset_name]
+        weight = label_config.item_weights_oz.get(sku, preset.get("default_item_oz"))
         if weight is None:
             raise LabelError(
-                f"no weight configured for SKU {sku!r} ({txn.get('title', '?')[:40]}) — "
-                "add it to [labels.item_weights_oz] or set parcel.default_item_oz"
+                f"no weight configured for SKU {sku!r} ({title}) — add it to "
+                f"[labels.item_weights_oz] or set default_item_oz on the {preset_name!r} parcel"
             )
-        total_oz += weight * qty
+        item_weight_total += weight * qty
+
+    if presets_used:
+        chosen = max(presets_used, key=lambda n: _volume(label_config.parcels[n]))
+    else:
+        chosen = label_config.default_parcel or next(iter(label_config.parcels))
+    box = label_config.parcels[chosen]
+    total_oz = box["packaging_oz"] + item_weight_total
+
     return {
         "length": box["length_in"],
         "width": box["width_in"],

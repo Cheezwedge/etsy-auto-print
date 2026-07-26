@@ -64,8 +64,11 @@ etsy-auto-print reprint 123 # re-print a slip (also un-holds a held order)
 1. Create a free Shippo account (Starter plan) and copy the **test** API
    token from Settings → API (it starts with `shippo_test_`).
 2. In `config.toml`, set `[labels] enabled = true`, paste the token, fill in
-   your `[labels.ship_from]` address, your `[labels.parcel]` box size, and
-   per-SKU weights in `[labels.item_weights_oz]`.
+   your `[labels.ship_from]` address, a box size under `[labels.parcel]`
+   (one box for everything) or multiple named presets under
+   `[labels.parcels.<name>]` + `[labels.item_parcels]` (different box sizes
+   per product — see the comments in `config.example.toml`), and per-SKU
+   weights in `[labels.item_weights_oz]`.
 3. Verify the whole flow with fake labels (free, printable, scannable):
 
 ```bash

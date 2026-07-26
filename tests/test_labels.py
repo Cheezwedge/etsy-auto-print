@@ -29,7 +29,9 @@ def label_config(**overrides) -> LabelConfig:
             "country": "US",
             "email": "shop@example.com",
         },
-        parcel={"length_in": 10, "width_in": 7, "height_in": 4, "packaging_oz": 3},
+        parcels={"default": {"length_in": 10, "width_in": 7, "height_in": 4, "packaging_oz": 3}},
+        item_parcels={},
+        default_parcel="default",
         item_weights_oz={"STAND-WAL": 9.5, "": 1.0},
         allowed_providers=["USPS"],
     )
@@ -113,10 +115,41 @@ def test_compute_parcel_unmapped_sku_holds(receipt):
 def test_compute_parcel_default_item_weight(receipt):
     cfg = label_config(
         item_weights_oz={},
-        parcel={"length_in": 10, "width_in": 7, "height_in": 4,
-                "packaging_oz": 3, "default_item_oz": 2.0},
+        parcels={"default": {"length_in": 10, "width_in": 7, "height_in": 4,
+                              "packaging_oz": 3, "default_item_oz": 2.0}},
     )
     assert compute_parcel(receipt, cfg)["weight"] == 3 + 2.0 * 4
+
+
+def test_compute_parcel_picks_largest_preset_among_items_present(receipt):
+    # receipt fixture has STAND-WAL (qty 1) and a blank-sku item (qty 3)
+    cfg = label_config(
+        parcels={
+            "small": {"length_in": 6, "width_in": 4, "height_in": 2, "packaging_oz": 1},
+            "large": {"length_in": 14, "width_in": 10, "height_in": 6, "packaging_oz": 5},
+        },
+        item_parcels={"STAND-WAL": "small", "": "large"},
+        default_parcel=None,
+        item_weights_oz={"STAND-WAL": 9.5, "": 1.0},
+    )
+    parcel = compute_parcel(receipt, cfg)
+    # "large" has the bigger volume, so the whole order ships in it despite
+    # only one line item mapping there — weight still sums every item.
+    assert parcel["length"] == 14
+    assert parcel["weight"] == 5 + 9.5 * 1 + 1.0 * 3
+
+
+def test_compute_parcel_unmapped_sku_with_multiple_presets_holds(receipt):
+    cfg = label_config(
+        parcels={
+            "small": {"length_in": 6, "width_in": 4, "height_in": 2, "packaging_oz": 1},
+            "large": {"length_in": 14, "width_in": 10, "height_in": 6, "packaging_oz": 5},
+        },
+        item_parcels={"STAND-WAL": "small"},  # "" (sticker sku) left unmapped
+        default_parcel=None,
+    )
+    with pytest.raises(LabelError, match="no box size configured"):
+        compute_parcel(receipt, cfg)
 
 
 def test_pick_rate_cheapest_within_allowed_providers():

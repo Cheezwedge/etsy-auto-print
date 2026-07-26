@@ -74,9 +74,10 @@ without opening ports).
   `new → label_purchased → printed → tracking_posted → done` (or `held`).
   Every step records before it acts; a crash mid-order resumes without
   double-buying.
-- **Parcel presets** — a small config maps listing IDs (or a default) to box
-  dimensions + weight. Multi-item orders sum weights and use the largest box,
-  or fall to `held` for manual review if unmapped.
+- **Parcel presets** ✅ — SKUs map to named box presets (`[labels.parcels.<name>]`
+  + `[labels.item_parcels]`), or one box for everything (`[labels.parcel]`).
+  Multi-item orders spanning presets sum weights and use the largest box by
+  volume; an unmapped SKU with no `default_parcel` holds for manual review.
 - **Service mapping** — the shipping method the buyer paid for (e.g. Priority
   upgrade) maps to an allowed set of Shippo service levels; buy the cheapest
   rate within that set.
