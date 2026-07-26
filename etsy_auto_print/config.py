@@ -14,8 +14,9 @@ from pathlib import Path
 DEFAULT_CONFIG_NAME = "config.toml"
 
 # Scopes: transactions_w is not used until the label phase, but requesting it
-# now means we won't need a second consent screen later.
-OAUTH_SCOPES = "transactions_r transactions_w"
+# now means we won't need a second consent screen later. shops_r is required
+# for the /users/me lookup used to auto-discover shop_id.
+OAUTH_SCOPES = "transactions_r transactions_w shops_r"
 
 
 class ConfigError(Exception):
