@@ -229,3 +229,53 @@ def test_unrecorded_attempt_blocks_repurchase(store, printer, receipt):
     assert row["state"] == "held"
     assert "Shippo dashboard" in row["error"]
     assert client.buy_calls == 0
+
+
+def test_weight_scales_with_quantity_but_box_does_not(receipt):
+    # receipt: STAND-WAL x1 (9.5oz) + blank-sku x3 (1.0oz) = 12.5 + 3 packaging
+    parcel = compute_parcel(receipt, label_config())
+    assert parcel["weight"] == 15.5
+    assert (parcel["length"], parcel["width"], parcel["height"]) == (10, 7, 4)
+
+
+def test_quantity_over_box_capacity_holds(receipt):
+    cfg = label_config(
+        parcels={
+            "default": {"length_in": 10, "width_in": 7, "height_in": 4,
+                        "packaging_oz": 3, "max_items": 2},
+        },
+    )
+    # receipt has 4 items total (1 stand + 3 stickers) against max_items = 2
+    with pytest.raises(LabelError, match="4 items.*max_items = 2"):
+        compute_parcel(receipt, cfg)
+
+
+def test_capacity_error_suggests_a_bigger_box_that_fits(receipt):
+    cfg = label_config(
+        parcels={
+            "small": {"length_in": 6, "width_in": 4, "height_in": 2,
+                      "packaging_oz": 1, "max_items": 2},
+            "jumbo": {"length_in": 20, "width_in": 16, "height_in": 12,
+                      "packaging_oz": 8, "max_items": 20},
+        },
+        item_parcels={"STAND-WAL": "small", "": "small"},
+        default_parcel=None,
+    )
+    with pytest.raises(LabelError, match="would fit: jumbo"):
+        compute_parcel(receipt, cfg)
+
+
+def test_max_items_absent_means_no_capacity_limit(receipt):
+    cfg = label_config()  # no max_items on the preset
+    assert compute_parcel(receipt, cfg)["weight"] == 15.5
+
+
+def test_capacity_counts_quantities_not_line_items(receipt):
+    # One line item, quantity 5, against a box that holds 3.
+    receipt["transactions"] = [{"title": "Mug", "sku": "STAND-WAL", "quantity": 5}]
+    cfg = label_config(
+        parcels={"default": {"length_in": 10, "width_in": 7, "height_in": 4,
+                             "packaging_oz": 3, "max_items": 3}},
+    )
+    with pytest.raises(LabelError, match="5 items"):
+        compute_parcel(receipt, cfg)

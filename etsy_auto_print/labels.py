@@ -66,15 +66,22 @@ def compute_parcel(receipt: dict, label_config) -> dict:
     """One box per order. Each item is mapped to a parcel preset (by SKU, or
     the shop's default/only preset); if an order mixes items that map to
     different presets, everything ships in the single largest one by volume.
-    Weight sums every item's own weight into that box."""
+    Weight sums every item's own weight (x quantity) into that box.
+
+    Box *dimensions* don't scale with quantity — five mugs don't fit in a
+    one-mug box. A preset can declare max_items; exceeding it holds the
+    order rather than shipping a label with dimensions that are a lie.
+    """
     transactions = receipt.get("transactions", [])
     presets_used: set[str] = set()
     item_weight_total = 0.0
+    item_count = 0
 
     for txn in transactions:
         sku = txn.get("sku") or ""
         qty = txn.get("quantity", 1)
         title = txn.get("title", "?")[:40]
+        item_count += qty
 
         preset_name = _preset_for_sku(sku, title, label_config)
         presets_used.add(preset_name)
@@ -84,7 +91,8 @@ def compute_parcel(receipt: dict, label_config) -> dict:
         if weight is None:
             raise LabelError(
                 f"no weight configured for SKU {sku!r} ({title}) — add it to "
-                f"[labels.item_weights_oz] or set default_item_oz on the {preset_name!r} parcel"
+                f"[labels.item_weights_oz], the items CSV, or set default_item_oz "
+                f"on the {preset_name!r} parcel"
             )
         item_weight_total += weight * qty
 
@@ -93,6 +101,20 @@ def compute_parcel(receipt: dict, label_config) -> dict:
     else:
         chosen = label_config.default_parcel or next(iter(label_config.parcels))
     box = label_config.parcels[chosen]
+
+    max_items = box.get("max_items")
+    if max_items is not None and item_count > max_items:
+        bigger = [
+            n for n, b in label_config.parcels.items()
+            if _volume(b) > _volume(box) and (b.get("max_items") or 0) >= item_count
+        ]
+        hint = f" (would fit: {', '.join(sorted(bigger))})" if bigger else ""
+        raise LabelError(
+            f"order has {item_count} items but the {chosen!r} box holds "
+            f"max_items = {max_items}{hint} — pack it manually, or raise "
+            f"max_items if they really do fit"
+        )
+
     total_oz = box["packaging_oz"] + item_weight_total
 
     return {
