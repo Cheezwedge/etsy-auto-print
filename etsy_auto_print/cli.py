@@ -205,6 +205,54 @@ def cmd_test_notify(config, args) -> int:
     return 0
 
 
+# Fields whose values are buyer PII. Redaction replaces the value but keeps
+# null/empty/present distinguishable, so the response *shape* stays readable
+# (e.g. whether Etsy populated shipping_method at all).
+_PII_FIELDS = frozenset({
+    "name", "first_line", "second_line", "city", "zip", "formatted_address",
+    "buyer_email", "seller_email", "buyer_user_id", "message_from_buyer",
+    "message_from_seller", "message_from_payment", "gift_message",
+    "gift_sender", "gift_wrap_price",
+})
+
+
+def _redact(value, key=None):
+    if isinstance(value, dict):
+        return {k: _redact(v, k) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_redact(v) for v in value]
+    if key in _PII_FIELDS and value not in (None, "", 0):
+        return f"<redacted {type(value).__name__}>"
+    return value
+
+
+def cmd_dump_receipt(config, args) -> int:
+    """Print the raw JSON Etsy returns for a receipt (for inspection/debugging)."""
+    import json
+
+    client = _build_client(config)
+    if args.receipt_id:
+        receipts = [client.get_receipt(args.receipt_id)]
+    else:
+        receipts = client.get_recent_receipts(limit=args.limit)
+        if not receipts:
+            print("No receipts found in this shop at all.", file=sys.stderr)
+            return 1
+
+    for receipt in receipts:
+        data = receipt if args.raw else _redact(receipt)
+        print(json.dumps(data, indent=2, sort_keys=True))
+        print()
+
+    if not args.raw:
+        print(
+            "# Buyer details are redacted; pass --raw to see them. Redacted values "
+            "still show whether Etsy populated the field (null vs <redacted>).",
+            file=sys.stderr,
+        )
+    return 0
+
+
 def cmd_retry(config, args) -> int:
     """Re-run the pipeline for a held order after fixing the cause."""
     store = Store(config.db_path)
@@ -385,6 +433,14 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("quote", help="show shipping rates for an order (no purchase)")
     p.add_argument("receipt_id", type=int)
     p.set_defaults(func=cmd_quote)
+
+    p = sub.add_parser(
+        "dump-receipt", help="print the raw JSON Etsy returns for recent order(s)"
+    )
+    p.add_argument("receipt_id", type=int, nargs="?", help="specific order; default: most recent")
+    p.add_argument("--limit", type=int, default=1, help="how many recent receipts (default 1)")
+    p.add_argument("--raw", action="store_true", help="include buyer PII (default: redacted)")
+    p.set_defaults(func=cmd_dump_receipt)
 
     p = sub.add_parser(
         "clear-attempt", help="clear a stuck purchase-attempt marker (see docs first)"

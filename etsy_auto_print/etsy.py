@@ -75,6 +75,20 @@ class EtsyClient:
     def get_receipt(self, receipt_id: int) -> dict:
         return self._request("GET", f"/shops/{self.shop_id}/receipts/{receipt_id}")
 
+    def get_recent_receipts(self, limit: int = 5) -> list[dict]:
+        """Most recent receipts regardless of paid/shipped state.
+
+        Unlike get_open_receipts (which drives the pipeline), this is for
+        inspection: it includes already-shipped orders, so there is
+        something to look at even when nothing is awaiting fulfillment.
+        """
+        page = self._request(
+            "GET",
+            f"/shops/{self.shop_id}/receipts",
+            params={"limit": limit, "sort_on": "created", "sort_order": "desc"},
+        )
+        return page.get("results", [])
+
     def create_receipt_shipment(
         self, receipt_id: int, tracking_code: str, carrier_name: str, send_bcc: bool = True
     ) -> dict:
