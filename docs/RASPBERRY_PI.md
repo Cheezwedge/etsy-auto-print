@@ -156,6 +156,38 @@ Then test whichever you configured:
 .venv/bin/etsy-auto-print test-notify
 ```
 
+## 7b. Web dashboard (optional but handy)
+
+A local web UI for status, editing config and products, viewing logs, and
+running the test actions — no SSH commands needed day to day.
+
+```bash
+.venv/bin/pip install -e ".[dashboard]"
+.venv/bin/etsy-auto-print dashboard
+```
+
+It binds to localhost. From your laptop:
+
+```bash
+ssh -L 8765:localhost:8765 youruser@<pi-ip>
+```
+
+then open <http://localhost:8765>. To skip the tunnel and use it from any
+device on your home network, set a password first (the page shows API
+tokens), then bind wide:
+
+```toml
+[dashboard]
+password = "pick-something-long"
+```
+```bash
+.venv/bin/etsy-auto-print dashboard --host 0.0.0.0
+```
+
+To have it always running, copy the systemd unit and change `run` to
+`dashboard` in `ExecStart` (use a distinct unit name, e.g.
+`etsy-auto-print-dashboard.service`).
+
 ## 8. Run as a service (starts on boot, restarts on failure)
 
 Edit `systemd/etsy-auto-print.service` — set `User=` to your username and

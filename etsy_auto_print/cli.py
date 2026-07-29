@@ -15,6 +15,7 @@ import argparse
 import logging
 import sys
 import time
+from pathlib import Path
 from datetime import datetime
 
 from .auth import AuthError, TokenStore, authorize
@@ -226,6 +227,44 @@ def _redact(value, key=None):
     return value
 
 
+def cmd_dashboard(config, args) -> int:
+    """Serve the local web dashboard."""
+    try:
+        from .dashboard import create_app
+    except ImportError:
+        print(
+            "The dashboard needs Flask. Install it with:\n"
+            '  pip install -e ".[dashboard]"',
+            file=sys.stderr,
+        )
+        return 1
+
+    password = args.password or config.dashboard_password
+    if args.host not in ("127.0.0.1", "localhost") and not password:
+        print(
+            f"Refusing to serve on {args.host} without a password.\n\n"
+            "This page shows API tokens that can spend real money, so exposing it\n"
+            "to the network unprotected is not safe. Either:\n"
+            "  • set dashboard.password in config.toml (or pass --password), or\n"
+            "  • leave the default localhost binding and tunnel in:\n"
+            f"      ssh -L {args.port}:localhost:{args.port} <user>@<pi>\n"
+            f"    then open http://localhost:{args.port}",
+            file=sys.stderr,
+        )
+        return 1
+
+    app = create_app(Path(args.config or "config.toml"), password)
+    where = "this machine only" if args.host in ("127.0.0.1", "localhost") else "the local network"
+    logging.info("Dashboard on http://%s:%s (reachable from %s)", args.host, args.port, where)
+    if args.host in ("127.0.0.1", "localhost"):
+        logging.info(
+            "Headless? From your laptop: ssh -L %s:localhost:%s <user>@<this-host>",
+            args.port, args.port,
+        )
+    app.run(host=args.host, port=args.port, debug=False)
+    return 0
+
+
 def cmd_dump_receipt(config, args) -> int:
     """Print the raw JSON Etsy returns for a receipt (for inspection/debugging)."""
     import json
@@ -433,6 +472,13 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("quote", help="show shipping rates for an order (no purchase)")
     p.add_argument("receipt_id", type=int)
     p.set_defaults(func=cmd_quote)
+
+    p = sub.add_parser("dashboard", help="serve the local web dashboard")
+    p.add_argument("--host", default="127.0.0.1",
+                   help="bind address (default localhost; 0.0.0.0 needs a password)")
+    p.add_argument("--port", type=int, default=8765)
+    p.add_argument("--password", default=None, help="overrides dashboard.password in config")
+    p.set_defaults(func=cmd_dashboard)
 
     p = sub.add_parser(
         "dump-receipt", help="print the raw JSON Etsy returns for recent order(s)"

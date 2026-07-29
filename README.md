@@ -57,7 +57,18 @@ etsy-auto-print run         # poll every 3 minutes, forever
 etsy-auto-print status      # every order and its state
 etsy-auto-print show 123    # details + event history for one order
 etsy-auto-print reprint 123 # re-print a slip (also un-holds a held order)
+etsy-auto-print dashboard   # web UI: status, config/products, logs, tests
 ```
+
+### Dashboard
+
+`etsy-auto-print dashboard` serves a local web UI — system health checks
+(service, Etsy, Shippo, printer, notifications), an order list with retry
+buttons, a spreadsheet-style product editor, a validated config editor, and
+the service log. It binds to localhost; tunnel in with
+`ssh -L 8765:localhost:8765 user@host`, or set `[dashboard] password` and
+pass `--host 0.0.0.0` to use it from your network. Needs
+`pip install -e ".[dashboard]"`.
 
 ### 5. Enable shipping labels (phase 2)
 

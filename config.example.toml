@@ -146,3 +146,18 @@ packaging_oz = 3.0
 # pushover.net/apps/build to create an application for the api token.
 # pushover_user_key = "your-pushover-user-key"
 # pushover_api_token = "your-pushover-app-api-token"
+
+# ---------------------------------------------------------------------------
+# Web dashboard (etsy-auto-print dashboard): status, config/product editing,
+# logs, and test buttons.
+#
+# It binds to localhost by default — reach it from a laptop with an SSH
+# tunnel, which needs no password:
+#     ssh -L 8765:localhost:8765 you@your-pi
+#     then open http://localhost:8765
+#
+# To open it to your home network instead (--host 0.0.0.0), a password is
+# REQUIRED: the page displays API tokens that can spend real money.
+
+[dashboard]
+# password = "pick-something-long"

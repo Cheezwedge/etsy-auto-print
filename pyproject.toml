@@ -12,7 +12,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7"]
+dev = ["pytest>=7", "flask>=3"]
+dashboard = ["flask>=3"]
 
 [project.scripts]
 etsy-auto-print = "etsy_auto_print.cli:main"
