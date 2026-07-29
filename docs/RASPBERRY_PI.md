@@ -188,6 +188,43 @@ To have it always running, copy the systemd unit and change `run` to
 `dashboard` in `ExecStart` (use a distinct unit name, e.g.
 `etsy-auto-print-dashboard.service`).
 
+### Let the dashboard restart the service
+
+The **Save & apply** and **Restart service** buttons run `systemctl restart`,
+which normally needs a password. Grant just that one command:
+
+```bash
+echo "$USER ALL=(root) NOPASSWD: /bin/systemctl restart etsy-auto-print" \
+  | sudo tee /etc/sudoers.d/etsy-auto-print
+sudo chmod 0440 /etc/sudoers.d/etsy-auto-print
+```
+
+This permits exactly one command and nothing else. Without it the buttons
+still save your changes — they just report that you need to run
+`sudo systemctl restart etsy-auto-print` yourself.
+
+## After you change settings — what to check
+
+The dashboard shows this checklist automatically after every save, but for
+reference:
+
+1. **Restart happened.** Config and products are read once at startup, so a
+   change does nothing until the service restarts. "Save & apply" does it for
+   you; plain "Save" does not.
+2. **Background service is green** on Status. If not, the service failed to
+   come back — the Logs tab says why (usually a config problem, though the
+   editor's validation makes that unlikely).
+3. **Etsy and Shippo are green**, and Shippo shows the mode you expect:
+   `TEST` = free fake labels, `LIVE` = real money per label.
+4. **Printer is green**, then **Print test label** and confirm a complete
+   physical label comes out.
+5. **After changing weights or boxes**, run `quote <order-id>` against a real
+   order — it shows the rate and chosen box without buying anything.
+6. **After changing notifications**, hit **Send test notification** and
+   confirm your phone buzzes.
+7. **Check Orders** for anything `held`. If your change fixed the cause (a
+   missing weight, say), hit Retry on that order.
+
 ## 8. Run as a service (starts on boot, restarts on failure)
 
 Edit `systemd/etsy-auto-print.service` — set `User=` to your username and

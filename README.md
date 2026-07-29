@@ -70,6 +70,12 @@ the service log. It binds to localhost; tunnel in with
 pass `--host 0.0.0.0` to use it from your network. Needs
 `pip install -e ".[dashboard]"`.
 
+Editors have **Save** and **Save & apply** — the latter also restarts the
+service (config is read at startup, so changes are inert until then) and
+drops you on Status with a checklist of what to verify. See
+[docs/RASPBERRY_PI.md](docs/RASPBERRY_PI.md) for the one-line sudoers rule
+that lets the restart button work without a password.
+
 ### 5. Enable shipping labels (phase 2)
 
 1. Create a free Shippo account (Starter plan) and copy the **test** API

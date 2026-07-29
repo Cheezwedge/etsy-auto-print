@@ -135,7 +135,39 @@ border:1px solid var(--line);color:var(--sub)}
 </main></body></html>
 """
 
+CHECKLIST = """
+<div class="card" style="border-color:var(--accent)">
+  <h2>✅ Applied — what to check now</h2>
+  <p class="muted">You changed <b>{{ what }}</b>{{ " and the service was restarted" if restarted else "" }}.
+     Work down this list; anything already green above is confirmed good.</p>
+  <ol style="margin:0;padding-left:20px;line-height:1.9">
+    <li><b>Background service</b> is green above — if it isn't, the service didn't
+        come back. Check the <a href="{{ url_for('logs') }}">Logs</a> tab for why.</li>
+    {% if not restarted %}
+    <li><b>Restart is still needed</b> for your change to take effect —
+        the running service is using the old settings until you do.
+        <div class="hint">sudo systemctl restart {{ unit }}</div></li>
+    {% endif %}
+    <li><b>Etsy / Shippo</b> rows are green, and Shippo shows the mode you expect
+        (TEST = free fake labels, LIVE = real money).</li>
+    <li><b>Printer</b> is green, then hit <b>Print test label</b> above and confirm a
+        physical label comes out complete.</li>
+    {% if what in ("products", "config") %}
+    <li><b>Weights and boxes</b>: run <code>quote &lt;order-id&gt;</code> on a real
+        order to see what a label would cost and which box it picks — it buys
+        nothing.</li>
+    {% endif %}
+    <li><b>Notifications</b>: hit <b>Send test notification</b> and confirm your phone
+        buzzes.</li>
+    <li><b>Orders</b>: check the <a href="{{ url_for('orders') }}">Orders</a> tab for
+        anything stuck in <span class="state-held">held</span> — a change you just made
+        may have fixed the cause, in which case hit Retry.</li>
+  </ol>
+</div>
+"""
+
 STATUS = """
+{{ checklist }}
 <div class="card">
   <h2>System health</h2>
   {% for c in checks %}
@@ -220,7 +252,9 @@ ITEMS = """
     </datalist>
     <div class="row">
       <button type="button" onclick="addRow()">Add product</button>
-      <button class="primary" type="submit">Save spreadsheet</button>
+      <button type="submit">Save</button>
+      <button class="primary" type="submit" name="apply" value="1">Save &amp; apply</button>
+      <span class="muted">“Save &amp; apply” also restarts the service and re-checks status.</span>
     </div>
   </form>
   <script>
@@ -245,8 +279,9 @@ CONFIG = """
   <form method="post">
     <textarea name="text" spellcheck="false">{{ text }}</textarea>
     <div class="row">
-      <button class="primary" type="submit">Validate &amp; save</button>
-      <span class="muted">Restart the service afterwards for changes to take effect.</span>
+      <button type="submit">Validate &amp; save</button>
+      <button class="primary" type="submit" name="apply" value="1">Save &amp; apply</button>
+      <span class="muted">“Save &amp; apply” also restarts the service and re-checks status.</span>
     </div>
   </form>
 </div>
@@ -293,6 +328,21 @@ def create_app(config_path: Path, password: str | None = None) -> Flask:
         body = Markup(render_template_string(template, **kw))
         return render_template_string(BASE, title=title, page=name, body=body)
 
+    def _finish(what: str):
+        """After a successful save: optionally restart, then show the checklist."""
+        if not request.form.get("apply"):
+            flash(f"Saved {what}. Restart the service to apply.", "ok")
+            return redirect(url_for("status", applied=what, restarted=0))
+        try:
+            _do_action("restart", app.config["CONFIG_PATH"], request.form)
+            flash(f"Saved {what} and restarted the service.", "ok")
+            return redirect(url_for("status", applied=what, restarted=1))
+        except Exception as exc:
+            flash(
+                f"Saved {what}, but the restart failed: {exc}", "err"
+            )
+            return redirect(url_for("status", applied=what, restarted=0))
+
     def protected(view):
         @wraps(view)
         def wrapper(*a, **kw):
@@ -321,7 +371,16 @@ def create_app(config_path: Path, password: str | None = None) -> Flask:
             results = checks.run_all(cfg())
         except ConfigError as exc:
             results = [checks.Check("Config", checks.FAIL, str(exc), "Fix it on the Config tab")]
-        return page(STATUS, "Status", "status", checks=results,
+        applied = request.args.get("applied")
+        checklist = ""
+        if applied:
+            checklist = Markup(render_template_string(
+                CHECKLIST,
+                what=applied,
+                restarted=request.args.get("restarted") == "1",
+                unit=SERVICE_UNIT,
+            ))
+        return page(STATUS, "Status", "status", checks=results, checklist=checklist,
                     output=session.pop("output", None))
 
     @app.route("/orders")
@@ -389,8 +448,7 @@ def create_app(config_path: Path, password: str | None = None) -> Flask:
                 ])
                 written += 1
             _atomic_write(csv_path, buf.getvalue())
-            flash(f"Saved {written} product(s). Restart the service to apply.", "ok")
-            return redirect(url_for("items"))
+            return _finish("products")
 
         rows = []
         if csv_path.exists():
@@ -427,8 +485,7 @@ def create_app(config_path: Path, password: str | None = None) -> Flask:
             if path.exists():
                 path.with_suffix(path.suffix + ".bak").write_text(path.read_text())
             _atomic_write(path, text)
-            flash("Saved. Restart the service to apply.", "ok")
-            return redirect(url_for("config_edit"))
+            return _finish("config")
         return page(CONFIG, "Config", "config", text=path.read_text() if path.exists() else "")
 
     @app.route("/logs")

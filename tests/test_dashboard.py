@@ -134,3 +134,45 @@ def test_password_gates_every_page(app_dir):
     assert client.get("/", follow_redirects=False).status_code == 302
     client.post("/login", data={"password": "hunter2"})
     assert client.get("/").status_code == 200
+
+
+def test_save_redirects_to_status_with_checklist(client, app_dir):
+    before = (app_dir / "config.toml").read_text()
+    resp = client.post(
+        "/config", data={"text": before + "\n[poll]\ninterval_seconds = 95\n"},
+        follow_redirects=True,
+    )
+    text = resp.get_data(as_text=True)
+    assert "what to check now" in text.lower()
+    # Plain Save doesn't restart, so the checklist must say so.
+    assert "Restart is still needed" in text
+
+
+def test_save_and_apply_keeps_the_save_even_if_restart_fails(client, app_dir):
+    # No systemd in the test environment, so the restart attempt fails — the
+    # config must still be written, and the user still told to restart.
+    before = (app_dir / "config.toml").read_text()
+    resp = client.post(
+        "/config",
+        data={"text": before + "\n[poll]\ninterval_seconds = 99\n", "apply": "1"},
+        follow_redirects=True,
+    )
+    assert "interval_seconds = 99" in (app_dir / "config.toml").read_text()
+    text = resp.get_data(as_text=True)
+    assert "restart failed" in text.lower()
+    assert "Restart is still needed" in text
+
+
+def test_products_apply_shows_checklist(client, app_dir):
+    resp = client.post(
+        "/items",
+        data={"sku": ["A"], "weight_oz": ["2"], "parcel": ["small"], "notes": [""],
+              "apply": "1"},
+        follow_redirects=True,
+    )
+    assert "A,2,small," in (app_dir / "items.csv").read_text()
+    assert "what to check now" in resp.get_data(as_text=True).lower()
+
+
+def test_plain_status_visit_has_no_checklist(client):
+    assert "what to check now" not in client.get("/").get_data(as_text=True).lower()
