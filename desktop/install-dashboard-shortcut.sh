@@ -64,6 +64,7 @@ echo "  launcher  $APP_DIR/$DESKTOP_FILE"
 [ -d "$DESKTOP_DIR" ] && echo "  desktop   $DESKTOP_DIR/$DESKTOP_FILE"
 echo
 echo "Connects to: $TARGET"
+echo "Launch log:  ${XDG_CACHE_HOME:-$HOME/.cache}/etsy-auto-print/launcher.log"
 echo "Search your applications for \"Etsy Label Dashboard\", or double-click the"
 echo "desktop icon. On GNOME you may have to right-click it once and choose"
 echo "\"Allow Launching\"."

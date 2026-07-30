@@ -224,6 +224,23 @@ works directly:
 Override the defaults with `ETSY_DASHBOARD_PORT` (default 8765) or
 `ETSY_PI_DIR` (default `etsy-auto-print`).
 
+**If the window opens and closes again straight away**, something failed
+before the connection got going. Every run is appended to a log, so the
+reason survives even when the window doesn't:
+
+```bash
+cat ~/.cache/etsy-auto-print/launcher.log
+```
+
+An empty or missing log means the launcher never reached the script at all —
+usually a stale copy in `~/.local/bin` (re-run the installer) or a desktop
+that ignores `Terminal=true`. Running it straight from a terminal you opened
+yourself sidesteps both and shows the error directly:
+
+```bash
+~/.local/bin/etsy-dashboard youruser@printpi.local
+```
+
 ### Let the dashboard restart the service
 
 The **Save & apply** and **Restart service** buttons run `systemctl restart`,

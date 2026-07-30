@@ -18,21 +18,53 @@ URL="http://127.0.0.1:${PORT}/"
 # Generous: this clock also covers however long you take to type the password.
 WAIT_SECONDS="${ETSY_DASHBOARD_WAIT:-120}"
 
+# Everything that happens is also appended here, so a window that closes too
+# fast to read never loses the reason why.
+LOG="${XDG_CACHE_HOME:-$HOME/.cache}/etsy-auto-print/launcher.log"
+mkdir -p "$(dirname "$LOG")" 2>/dev/null || LOG=/dev/null
+printf '\n=== %s === target=%s port=%s\n' \
+  "$(date '+%Y-%m-%d %H:%M:%S')" "${TARGET:-<none>}" "$PORT" >>"$LOG" 2>/dev/null
+
+say() {
+  echo "$*"
+  echo "$*" >>"$LOG" 2>/dev/null
+}
+
 # Keep the window up on failure — a launcher-spawned terminal usually closes
 # the instant the script exits, taking the error message with it. Armed before
 # the first thing that can fail, so no message is ever lost.
+#
+# Read from /dev/tty rather than stdin: a desktop launcher commonly hands the
+# process /dev/null on stdin, which makes a plain `read` return instantly and
+# close the window anyway — the exact thing this is here to prevent.
 hold_window() {
   echo
-  read -r -p "Press Enter to close this window. " _ || true
+  echo "Full log: $LOG"
+  # /dev/tty can exist but not be openable (cron, some launchers), so the
+  # redirect itself has to be allowed to fail quietly.
+  # Redirections apply left to right, so stderr must be silenced *before* the
+  # /dev/tty open is attempted or its failure still reaches the screen.
+  if read -r -p "Press Enter to close this window. " _ 2>/dev/null </dev/tty; then
+    return
+  fi
+  # No terminal to prompt on. Stay alive briefly so the text stays readable.
+  echo "(closing in 90s — Ctrl-C to close now)"
+  sleep 90
 }
 trap hold_window EXIT
 
 if [ -z "$TARGET" ]; then
-  echo "No Pi to connect to."
+  say "No Pi to connect to."
   echo
-  echo "Pass it as an argument:   $0 youruser@printpi.local"
-  echo "or set the environment:   ETSY_PI_HOST=youruser@printpi.local"
+  say "Pass it as an argument:   $0 youruser@printpi.local"
+  say "or set the environment:   ETSY_PI_HOST=youruser@printpi.local"
   exit 2
+fi
+
+if ! command -v ssh >/dev/null 2>&1; then
+  say "ssh is not installed on this machine."
+  say "Install it with:   sudo apt install openssh-client"
+  exit 127
 fi
 
 # --- is the dashboard actually answering on the forwarded port? ------------
@@ -54,17 +86,20 @@ http_ready() {
 open_browser() {
   for opener in xdg-open sensible-browser x-www-browser firefox chromium google-chrome; do
     if command -v "$opener" >/dev/null 2>&1; then
-      "$opener" "$URL" >/dev/null 2>&1 &
+      say "Opening $URL with $opener"
+      "$opener" "$URL" >>"$LOG" 2>&1 &
       return 0
     fi
   done
-  echo "No browser launcher found — open this yourself: $URL"
+  say "No browser launcher found — open this yourself: $URL"
 }
 
 # Already connected from an earlier launch? Just bring up the page again.
 if http_ready; then
-  echo "Dashboard is already reachable at $URL — opening it."
+  say "Dashboard is already reachable at $URL — opening it."
   open_browser
+  # Give a just-spawned browser a moment before the window disappears.
+  sleep 2
   trap - EXIT
   exit 0
 fi
@@ -85,8 +120,8 @@ else
 fi
 "
 
-echo "Connecting to ${TARGET} ..."
-echo "(enter your Pi password if prompted; the browser opens by itself)"
+say "Connecting to ${TARGET} ..."
+say "(enter your Pi password if prompted; the browser opens by itself)"
 echo
 
 # Open the browser as soon as the page actually answers, without blocking ssh.
@@ -103,20 +138,22 @@ echo
     sleep 1
   done
   echo
-  echo "Still nothing on $URL after ${WAIT_SECONDS}s."
-  echo "The connection is up, so the dashboard itself did not start — the"
-  echo "messages above should say why. Common cause: the dashboard extra is"
-  echo "not installed on the Pi (.venv/bin/pip install -e \".[dashboard]\")."
+  say "Still nothing on $URL after ${WAIT_SECONDS}s."
+  say "The connection is up, so the dashboard itself did not start — the"
+  say "messages above should say why. Common cause: the dashboard extra is"
+  say "not installed on the Pi (.venv/bin/pip install -e \".[dashboard]\")."
 ) &
 WAITER=$!
 
 # ExitOnForwardFailure: fail loudly if port $PORT is already taken locally,
 # rather than connecting with no working tunnel.
+# ssh's own errors are teed into the log; stdin and stdout stay attached to the
+# terminal so the password prompt and remote output behave normally.
 ssh -t \
   -o ExitOnForwardFailure=yes \
   -o ServerAliveInterval=30 \
   -L "${PORT}:127.0.0.1:${PORT}" \
-  "$TARGET" "$REMOTE_CMD"
+  "$TARGET" "$REMOTE_CMD" 2> >(tee -a "$LOG" >&2)
 STATUS=$?
 
 kill "$WAITER" 2>/dev/null || true
@@ -124,9 +161,14 @@ wait "$WAITER" 2>/dev/null || true
 
 echo
 if [ "$STATUS" -eq 0 ]; then
-  echo "Disconnected from ${TARGET}."
+  say "Disconnected from ${TARGET}."
 else
-  echo "Connection to ${TARGET} ended with status ${STATUS}."
-  echo "If the port was already in use, close the other dashboard window first."
+  say "Connection to ${TARGET} ended with status ${STATUS}."
+  case "$STATUS" in
+    255) say "ssh could not connect. Check the hostname, and that you can run:"
+         say "    ssh ${TARGET}" ;;
+    *)   say "If port ${PORT} was already in use here, close the other dashboard"
+         say "window first." ;;
+  esac
 fi
 exit "$STATUS"
