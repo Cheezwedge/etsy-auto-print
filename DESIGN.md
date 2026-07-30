@@ -18,7 +18,10 @@ What the API *can* do:
   address, items ordered, shipping method paid for.
 - Accept tracking back via `createReceiptShipment` — this marks the order
   shipped and emails the buyer with tracking, exactly as if you'd done it in
-  the Etsy UI.
+  the Etsy UI. It also accepts optional shipment details (service level,
+  weight, dimensions, label cost, ship date), which Etsy uses for faster
+  tracking updates; we send everything we know from the purchased label, and
+  fall back to the tracking number alone if Etsy refuses any of it.
 
 So we don't buy the label from Etsy. We buy postage from a **postage API**
 (Shippo recommended; EasyPost is equivalent) and push the tracking number back

@@ -15,8 +15,8 @@ from dataclasses import dataclass, field
 import requests
 
 from .auth import TokenStore
-from .config import Config
-from .etsy import EtsyClient
+from .config import OAUTH_SCOPES, Config
+from .etsy import EtsyClient, ping
 
 OK, WARN, FAIL = "ok", "warn", "fail"
 
@@ -54,6 +54,63 @@ def check_service(unit: str = "etsy-auto-print") -> Check:
         )
     return Check("Background service", FAIL, f"state: {out or 'unknown'}",
                  f"journalctl -u {unit} -n 50")
+
+
+def check_etsy_api(config: Config) -> Check:
+    """Is Etsy reachable and are the app credentials good?
+
+    This endpoint needs no OAuth token, so it tells "Etsy is down" and "the
+    keystring/shared secret is wrong" apart from "our token went bad" — which
+    otherwise all look like the same failed poll.
+    """
+    try:
+        resp = ping(config.api_key)
+    except requests.RequestException as exc:
+        return Check("Etsy API reachable", FAIL, f"unreachable: {exc}"[:300],
+                     "Check this machine's network connection")
+    if resp.status_code == 200:
+        return Check("Etsy API reachable", OK, "openapi-ping responded")
+    if resp.status_code in (401, 403):
+        return Check(
+            "Etsy API reachable", FAIL,
+            f"app credentials rejected ({resp.status_code}): {resp.text[:150]}",
+            "Check etsy.keystring and etsy.shared_secret — this call uses no token",
+        )
+    return Check("Etsy API reachable", FAIL,
+                 f"HTTP {resp.status_code}: {resp.text[:150]}",
+                 "Etsy may be having an outage; check status.etsy.com")
+
+
+def check_etsy_scopes(config: Config) -> Check:
+    """Does the stored token still carry every permission the program needs?
+
+    Etsy grants scopes at authorization time, so adding a feature that needs a
+    new scope silently breaks an old token. Better a red row here than a 403
+    on a live order.
+    """
+    required = set(OAUTH_SCOPES.split())
+    tokens = TokenStore(config)
+    if not tokens.authorized:
+        # The row above already reports this as a failure; don't double-count it.
+        return Check("Etsy permissions", WARN, "not authorized yet — nothing to check",
+                     f"Will need: {' '.join(sorted(required))}")
+    try:
+        granted = set(EtsyClient(config, tokens).token_scopes())
+    except Exception as exc:
+        return Check("Etsy permissions", WARN,
+                     f"could not read the token's scopes: {exc}"[:300])
+    if not granted:
+        return Check("Etsy permissions", WARN,
+                     "Etsy returned no scope list for this token",
+                     f"Expected: {' '.join(sorted(required))}")
+    missing = sorted(required - granted)
+    if missing:
+        return Check(
+            "Etsy permissions", FAIL, f"token is missing: {', '.join(missing)}",
+            "Delete tokens.json and re-run: etsy-auto-print auth",
+            facts={"granted": " ".join(sorted(granted))},
+        )
+    return Check("Etsy permissions", OK, " ".join(sorted(granted)))
 
 
 def check_etsy(config: Config) -> Check:
@@ -149,7 +206,9 @@ def check_notifications(config: Config) -> Check:
 def run_all(config: Config) -> list[Check]:
     return [
         check_service(),
+        check_etsy_api(config),
         check_etsy(config),
+        check_etsy_scopes(config),
         check_shippo(config),
         check_printer(config),
         check_notifications(config),

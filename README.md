@@ -55,6 +55,7 @@ etsy-auto-print test-slip   # render a sample slip with fake data
 etsy-auto-print poll        # check for new orders once
 etsy-auto-print run         # poll every 3 minutes, forever
 etsy-auto-print status      # every order and its state
+etsy-auto-print check       # health-check every connection (exit 1 if broken)
 etsy-auto-print show 123    # details + event history for one order
 etsy-auto-print reprint 123 # re-print a slip (also un-holds a held order)
 etsy-auto-print dashboard   # web UI: status, config/products, logs, tests
@@ -123,6 +124,12 @@ etsy-auto-print test-notify   # should pop up on your phone
 3. Restart `run`. From now on labels cost real postage and each completed
    order is marked shipped on Etsy with tracking (buyer gets Etsy's normal
    shipping-notification email).
+
+Tracking is uploaded with the shipment details Etsy accepts alongside it —
+service level, package weight and dimensions, what the label cost, and the
+ship date — which Etsy uses to give buyers faster tracking updates. All of it
+is optional: if Etsy rejects any of it, the tracking number is re-sent on its
+own rather than holding an order the buyer is waiting on.
 
 For always-on operation on a Raspberry Pi, follow the full step-by-step
 guide in [docs/RASPBERRY_PI.md](docs/RASPBERRY_PI.md).

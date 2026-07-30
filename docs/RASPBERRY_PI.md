@@ -214,7 +214,8 @@ reference:
 2. **Background service is green** on Status. If not, the service failed to
    come back — the Logs tab says why (usually a config problem, though the
    editor's validation makes that unlikely).
-3. **Etsy and Shippo are green**, and Shippo shows the mode you expect:
+3. **Etsy is green on all three rows** — reachable, connected, and
+   permissions. **Shippo is green** and shows the mode you expect:
    `TEST` = free fake labels, `LIVE` = real money per label.
 4. **Printer is green**, then **Print test label** and confirm a complete
    physical label comes out.
@@ -251,6 +252,10 @@ journalctl -u etsy-auto-print -f          # live log
 - Your phone notifies you when an order needs attention; the message
   includes the exact `retry` command.
 - `etsy-auto-print status` / `show <id>` — inspect anything, any time.
+- `etsy-auto-print check` — the dashboard's Status page as terminal output:
+  service, Etsy reachability, token permissions, Shippo, printer,
+  notifications. Exits non-zero if anything is failing, so it works as the
+  health command behind a desktop shortcut or a cron alert.
 - Update: `cd ~/etsy-auto-print && git pull && sudo systemctl restart etsy-auto-print`
 - Back up the three private files occasionally:
 
@@ -267,4 +272,5 @@ journalctl -u etsy-auto-print -f          # live log
 | `lp failed for queue` in log | Queue name in config matches `lpstat -p`; user in `lp`/`lpadmin` group |
 | Garbage characters printed | Raw queue + PDF file type mismatch: Zebra wants `ZPLII`, driver queues want `PDF_4x6` |
 | Poll errors after weeks of uptime | Etsy refresh token expired (90 days idle) — rerun `auth` via the SSH tunnel |
+| Etsy calls suddenly 403 | `etsy-auto-print check` — "Etsy permissions" names any scope the token is missing; "Etsy API reachable" separates an Etsy outage or a bad keystring from a bad token |
 | Service dead after power cut | `journalctl -u etsy-auto-print -b` for the reason; it auto-restarts on failure |

@@ -209,11 +209,18 @@ class Labeler:
             object_id=txn.get("object_id", ""),
             carrier=rate.get("provider", ""),
             service=rate.get("servicelevel", {}).get("name", ""),
+            service_token=rate.get("servicelevel", {}).get("token", ""),
             amount=rate.get("amount", ""),
             currency=rate.get("currency", ""),
             tracking_number=txn.get("tracking_number", ""),
             tracking_url=txn.get("tracking_url_provider", ""),
             label_url=txn.get("label_url", ""),
+            # What the carrier was actually told the package is; sent to Etsy
+            # with the tracking number so its shipment record matches.
+            weight_oz=parcel["weight"],
+            length_in=parcel["length"],
+            width_in=parcel["width"],
+            height_in=parcel["height"],
             is_test=self.client.is_test,
         )
         self.store.clear_label_attempt(rid)

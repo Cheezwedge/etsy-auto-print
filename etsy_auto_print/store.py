@@ -59,7 +59,12 @@ CREATE TABLE IF NOT EXISTS labels (
     tracking_url    TEXT,
     label_url       TEXT,
     is_test         INTEGER NOT NULL DEFAULT 0,
-    created_at      REAL NOT NULL
+    created_at      REAL NOT NULL,
+    service_token   TEXT,
+    weight_oz       REAL,
+    length_in       REAL,
+    width_in        REAL,
+    height_in       REAL
 );
 CREATE TABLE IF NOT EXISTS label_attempts (
     receipt_id INTEGER PRIMARY KEY,
@@ -67,13 +72,54 @@ CREATE TABLE IF NOT EXISTS label_attempts (
 );
 """
 
+# Everything save_label() writes, in column order. What was actually shipped
+# (service, weight, dimensions, price) is kept so it can be sent to Etsy with
+# the tracking number later — the config may have changed by then, so this
+# must be a record of the shipment, not something recomputed.
+_LABEL_COLUMNS = (
+    "object_id",
+    "carrier",
+    "service",
+    "service_token",
+    "amount",
+    "currency",
+    "tracking_number",
+    "tracking_url",
+    "label_url",
+    "weight_oz",
+    "length_in",
+    "width_in",
+    "height_in",
+)
+
+# Numeric columns default to NULL when unknown; the text ones to "" so that
+# code formatting them into a string never prints "None".
+_LABEL_NUMERIC = frozenset({"weight_oz", "length_in", "width_in", "height_in"})
+
+# Columns added after the first release, for databases created before them.
+_LABEL_MIGRATIONS = {
+    "service_token": "TEXT",
+    "weight_oz": "REAL",
+    "length_in": "REAL",
+    "width_in": "REAL",
+    "height_in": "REAL",
+}
+
 
 class Store:
     def __init__(self, path: str | Path):
         self.conn = sqlite3.connect(path)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(_SCHEMA)
+        self._migrate()
         self.conn.commit()
+
+    def _migrate(self) -> None:
+        """Add columns missing from a database created by an older version."""
+        have = {row["name"] for row in self.conn.execute("PRAGMA table_info(labels)")}
+        for column, decl in _LABEL_MIGRATIONS.items():
+            if column not in have:
+                self.conn.execute(f"ALTER TABLE labels ADD COLUMN {column} {decl}")
 
     def close(self) -> None:
         self.conn.close()
@@ -147,23 +193,20 @@ class Store:
         self.conn.commit()
 
     def save_label(self, receipt_id: int, **fields) -> None:
+        unknown = set(fields) - set(_LABEL_COLUMNS) - {"is_test"}
+        if unknown:
+            raise TypeError(f"save_label got unknown field(s): {', '.join(sorted(unknown))}")
+        columns = ("receipt_id", *_LABEL_COLUMNS, "is_test", "created_at")
+        values = (
+            receipt_id,
+            *(fields.get(c, None if c in _LABEL_NUMERIC else "") for c in _LABEL_COLUMNS),
+            int(fields.get("is_test", False)),
+            time.time(),
+        )
+        placeholders = ", ".join("?" * len(columns))
         self.conn.execute(
-            "INSERT OR REPLACE INTO labels (receipt_id, object_id, carrier, service, "
-            "amount, currency, tracking_number, tracking_url, label_url, is_test, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                receipt_id,
-                fields.get("object_id", ""),
-                fields.get("carrier", ""),
-                fields.get("service", ""),
-                fields.get("amount", ""),
-                fields.get("currency", ""),
-                fields.get("tracking_number", ""),
-                fields.get("tracking_url", ""),
-                fields.get("label_url", ""),
-                int(fields.get("is_test", False)),
-                time.time(),
-            ),
+            f"INSERT OR REPLACE INTO labels ({', '.join(columns)}) VALUES ({placeholders})",
+            values,
         )
         self.conn.commit()
 

@@ -4,6 +4,7 @@
     etsy-auto-print poll              single poll pass
     etsy-auto-print run               poll forever (systemd target)
     etsy-auto-print status            show every order and its state
+    etsy-auto-print check             health-check every connection
     etsy-auto-print show ID           full detail + event history for one order
     etsy-auto-print reprint ID        re-render + re-print a slip (un-holds)
     etsy-auto-print test-slip         print a sample slip with fake data
@@ -18,6 +19,7 @@ import time
 from pathlib import Path
 from datetime import datetime
 
+from . import checks
 from .auth import AuthError, TokenStore, authorize
 from .config import Config, ConfigError, load_config
 from .etsy import EtsyApiError, EtsyClient
@@ -138,6 +140,29 @@ def cmd_status(config, args) -> int:
     held = store.in_state("held")
     if held:
         print(f"\n{len(held)} order(s) HELD and need attention (see 'show', then 'reprint').")
+    return 0
+
+
+_CHECK_MARK = {checks.OK: "ok  ", checks.WARN: "warn", checks.FAIL: "FAIL"}
+
+
+def cmd_check(config, args) -> int:
+    """Run every health check — the dashboard's Status page, over SSH.
+
+    Exit code 1 if anything failed, so it can drive a shortcut or a cron
+    alert without parsing the output.
+    """
+    results = checks.run_all(config)
+    for check in results:
+        print(f"[{_CHECK_MARK[check.state]}] {check.name}: {check.detail}")
+        for key, value in check.facts.items():
+            print(f"           {key}: {value}")
+        if check.hint and check.state != checks.OK:
+            print(f"           -> {check.hint}")
+    failed = [c.name for c in results if c.state == checks.FAIL]
+    if failed:
+        print(f"\n{len(failed)} check(s) failing: {', '.join(failed)}")
+        return 1
     return 0
 
 
@@ -442,6 +467,9 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("poll", help="check for new orders once").set_defaults(func=cmd_poll)
     sub.add_parser("run", help="poll continuously").set_defaults(func=cmd_run)
     sub.add_parser("status", help="list orders and states").set_defaults(func=cmd_status)
+    sub.add_parser(
+        "check", help="health-check every connection (Etsy, Shippo, printer, ...)"
+    ).set_defaults(func=cmd_check)
 
     p = sub.add_parser("show", help="details + history for one order")
     p.add_argument("receipt_id", type=int)

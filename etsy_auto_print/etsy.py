@@ -9,6 +9,29 @@ from .config import Config
 
 API_BASE = "https://api.etsy.com/v3/application"
 
+# Optional fields createReceiptShipment accepts alongside the tracking number.
+# Guarded rather than passed through blindly: a typo here would be silently
+# dropped by Etsy, and the shipment record would quietly lack the field.
+SHIPMENT_EXTRAS = frozenset({
+    "mail_class",
+    "weight",
+    "weight_units",
+    "length",
+    "width",
+    "height",
+    "dimension_units",
+    "shipping_label_cost",
+    "shipping_label_currency",
+    "ship_date",
+    "note_to_buyer",
+    "ship_from_country",
+    "ship_to_country",
+    "customs_data",
+    "duty_amount",
+    "duty_currency",
+    "incoterm",
+})
+
 
 class EtsyApiError(Exception):
     def __init__(self, status: int, body: str):
@@ -90,15 +113,76 @@ class EtsyClient:
         return page.get("results", [])
 
     def create_receipt_shipment(
-        self, receipt_id: int, tracking_code: str, carrier_name: str, send_bcc: bool = True
+        self,
+        receipt_id: int,
+        tracking_code: str,
+        carrier_name: str,
+        send_bcc: bool = True,
+        **extras,
     ) -> dict:
-        """Post tracking to Etsy: marks the order shipped and emails the buyer."""
+        """Post tracking to Etsy: marks the order shipped and emails the buyer.
+
+        Only tracking_code and carrier_name are required. Etsy accepts a dozen
+        optional shipment details (see SHIPMENT_EXTRAS) which it uses to give
+        buyers richer, faster tracking updates; pass whatever is known and
+        omit the rest.
+        """
+        unknown = set(extras) - SHIPMENT_EXTRAS
+        if unknown:
+            raise TypeError(
+                f"create_receipt_shipment got field(s) Etsy does not accept: "
+                f"{', '.join(sorted(unknown))}"
+            )
+        body = {
+            "tracking_code": tracking_code,
+            "carrier_name": carrier_name,
+            "send_bcc": send_bcc,
+        }
+        body.update({k: v for k, v in extras.items() if v is not None})
         return self._request(
-            "POST",
-            f"/shops/{self.shop_id}/receipts/{receipt_id}/tracking",
-            json={
-                "tracking_code": tracking_code,
-                "carrier_name": carrier_name,
-                "send_bcc": send_bcc,
-            },
+            "POST", f"/shops/{self.shop_id}/receipts/{receipt_id}/tracking", json=body
         )
+
+    def token_scopes(self) -> list[str]:
+        """The scopes actually granted to the stored token.
+
+        Lets a scope problem be reported as such instead of surfacing later as
+        a mystery 403 on whichever endpoint happens to need it.
+        """
+        data = self._request(
+            "POST", "/scopes", data={"token": self.tokens.access_token()}
+        )
+        return _extract_scopes(data)
+
+
+def _extract_scopes(data) -> list[str]:
+    """Pull the scope list out of POST /scopes.
+
+    Etsy documents the response as an opaque object, so accept the shapes it
+    could plausibly be rather than guessing one and breaking on the others.
+    """
+    if isinstance(data, list):
+        return [str(item) for item in data]
+    if not isinstance(data, dict):
+        return []
+    for key in ("scopes", "results", "scope"):
+        value = data.get(key)
+        if isinstance(value, str):
+            return value.split()
+        if isinstance(value, list):
+            return [str(item) for item in value]
+    for value in data.values():
+        if isinstance(value, list) and all(isinstance(item, str) for item in value):
+            return list(value)
+    return []
+
+
+def ping(api_key: str, timeout: int = 15) -> requests.Response:
+    """Call Etsy's unauthenticated health endpoint.
+
+    Needs only the x-api-key header, which separates "Etsy is down" and "our
+    app credentials are wrong" from "our OAuth token went bad".
+    """
+    return requests.get(
+        f"{API_BASE}/openapi-ping", headers={"x-api-key": api_key}, timeout=timeout
+    )

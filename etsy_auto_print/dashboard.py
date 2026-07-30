@@ -148,8 +148,9 @@ CHECKLIST = """
         the running service is using the old settings until you do.
         <div class="hint">sudo systemctl restart {{ unit }}</div></li>
     {% endif %}
-    <li><b>Etsy / Shippo</b> rows are green, and Shippo shows the mode you expect
-        (TEST = free fake labels, LIVE = real money).</li>
+    <li><b>Etsy</b> rows are all green — reachable, connected, and permissions —
+        and <b>Shippo</b> shows the mode you expect (TEST = free fake labels,
+        LIVE = real money).</li>
     <li><b>Printer</b> is green, then hit <b>Print test label</b> above and confirm a
         physical label comes out complete.</li>
     {% if what in ("products", "config") %}
@@ -174,6 +175,9 @@ STATUS = """
     <div class="check {{ c.state }}"><div class="dot"></div><div>
       <b>{{ c.name }}</b>
       <div class="detail">{{ c.detail }}</div>
+      {% if c.facts %}<div class="detail">{% for k, v in c.facts.items() %}
+        {{ k }}: {{ v }}{% if not loop.last %} &middot; {% endif %}
+      {% endfor %}</div>{% endif %}
       {% if c.hint %}<div class="hint">{{ c.hint }}</div>{% endif %}
     </div></div>
   {% endfor %}

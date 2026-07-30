@@ -9,6 +9,7 @@ tracking number must never reach a buyer.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
 from .etsy import EtsyApiError, EtsyClient
 from .labels import LabelError, Labeler
@@ -101,6 +102,48 @@ def advance_order(
     return moved
 
 
+def _num(value) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def shipment_extras(label) -> dict:
+    """The optional shipment details Etsy accepts, from the purchased label.
+
+    Etsy uses these to give the buyer richer, faster tracking updates. Every
+    one is optional and every one is skipped when unknown, so an older label
+    row (recorded before these columns existed) simply sends less.
+    """
+    extras: dict = {}
+    if label["service"]:
+        extras["mail_class"] = label["service"]
+
+    weight = _num(label["weight_oz"])
+    if weight:
+        extras.update(weight=weight, weight_units="oz")
+
+    dims = [_num(label[c]) for c in ("length_in", "width_in", "height_in")]
+    if all(dims):
+        # Etsy wants them ordered longest side first.
+        length, width, height = sorted(dims, reverse=True)
+        extras.update(
+            length=length, width=width, height=height, dimension_units="in"
+        )
+
+    cost = _num(label["amount"])
+    if cost is not None:
+        extras["shipping_label_cost"] = cost
+        extras["shipping_label_currency"] = label["currency"] or "USD"
+
+    if label["created_at"]:
+        extras["ship_date"] = datetime.fromtimestamp(
+            label["created_at"], tz=timezone.utc
+        ).strftime("%Y-%m-%d")
+    return extras
+
+
 def post_tracking(rid: int, store: Store, etsy: EtsyClient) -> bool | str | None:
     """Post a real label's tracking number to Etsy.
 
@@ -115,10 +158,27 @@ def post_tracking(rid: int, store: Store, etsy: EtsyClient) -> bool | str | None
         # label_printed; it completes only with a live label.
         return None
     carrier = CARRIER_NAMES.get(label["carrier"], label["carrier"].lower())
+    extras = shipment_extras(label)
     try:
-        etsy.create_receipt_shipment(rid, label["tracking_number"], carrier)
+        etsy.create_receipt_shipment(rid, label["tracking_number"], carrier, **extras)
     except EtsyApiError as exc:
-        return f"tracking upload to Etsy failed: {exc}"
+        # The extra shipment details are a nice-to-have; getting the tracking
+        # number to the buyer is not. If Etsy rejects the enriched payload,
+        # fall back to the two fields that have always worked rather than
+        # holding an order over a cosmetic field. (A 4xx means Etsy validated
+        # and refused the request, so nothing was recorded to duplicate.)
+        if not extras or not 400 <= exc.status < 500:
+            return f"tracking upload to Etsy failed: {exc}"
+        log.warning(
+            "Order #%s: Etsy rejected the detailed tracking upload (%s) — "
+            "retrying with tracking number only",
+            rid,
+            exc,
+        )
+        try:
+            etsy.create_receipt_shipment(rid, label["tracking_number"], carrier)
+        except EtsyApiError as retry_exc:
+            return f"tracking upload to Etsy failed: {retry_exc}"
     store.transition(rid, "tracking_posted", f"{carrier} {label['tracking_number']}")
     store.transition(rid, "done", "buyer notified by Etsy")
     log.info("Order #%s: tracking posted (%s), order complete", rid, label["tracking_number"])
