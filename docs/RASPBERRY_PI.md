@@ -188,6 +188,42 @@ To have it always running, copy the systemd unit and change `run` to
 `dashboard` in `ExecStart` (use a distinct unit name, e.g.
 `etsy-auto-print-dashboard.service`).
 
+### One-click launcher on your Linux desktop
+
+Instead of remembering the tunnel command, install a launcher that does the
+whole thing: connects to the Pi (you type your SSH password once), starts the
+dashboard if it isn't already running, forwards the port, and opens the page
+in your browser.
+
+From the repo on your **desktop** (not the Pi):
+
+```bash
+./desktop/install-dashboard-shortcut.sh youruser@printpi.local
+```
+
+That puts "Etsy Label Dashboard" in your applications menu and on your
+desktop. On GNOME, right-click the desktop icon once and choose **Allow
+Launching**. Re-run the installer any time to point it at a different Pi.
+
+The terminal window it opens *is* the connection — leave it open while you
+use the dashboard, and close it (or Ctrl-C) to disconnect. Because everything
+goes through the tunnel, the dashboard stays bound to localhost on the Pi and
+needs no dashboard password.
+
+It's safe to click when a dashboard is already running on the Pi (its own
+systemd unit, say): it reuses that one rather than trying to start a second.
+And if you click it twice, the second click just re-opens the browser tab.
+
+Don't have a graphical desktop, or want it from a terminal? The same script
+works directly:
+
+```bash
+./desktop/etsy-dashboard youruser@printpi.local
+```
+
+Override the defaults with `ETSY_DASHBOARD_PORT` (default 8765) or
+`ETSY_PI_DIR` (default `etsy-auto-print`).
+
 ### Let the dashboard restart the service
 
 The **Save & apply** and **Restart service** buttons run `systemctl restart`,

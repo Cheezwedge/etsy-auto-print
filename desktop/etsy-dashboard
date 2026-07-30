@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+# One-click: connect to the print Pi, make sure the dashboard is running,
+# forward its port, and open it in this machine's browser.
+#
+# Run by the "Etsy Label Dashboard" desktop launcher, but it works standalone:
+#     ./etsy-dashboard youruser@printpi.local
+#
+# The dashboard binds to localhost on the Pi and is reached through the SSH
+# tunnel, so it is never exposed to your network and needs no dashboard
+# password. You type your SSH password once, in the terminal window.
+
+set -u
+
+TARGET="${1:-${ETSY_PI_HOST:-}}"
+REMOTE_DIR="${ETSY_PI_DIR:-etsy-auto-print}"
+PORT="${ETSY_DASHBOARD_PORT:-8765}"
+URL="http://127.0.0.1:${PORT}/"
+# Generous: this clock also covers however long you take to type the password.
+WAIT_SECONDS="${ETSY_DASHBOARD_WAIT:-120}"
+
+# Keep the window up on failure — a launcher-spawned terminal usually closes
+# the instant the script exits, taking the error message with it. Armed before
+# the first thing that can fail, so no message is ever lost.
+hold_window() {
+  echo
+  read -r -p "Press Enter to close this window. " _ || true
+}
+trap hold_window EXIT
+
+if [ -z "$TARGET" ]; then
+  echo "No Pi to connect to."
+  echo
+  echo "Pass it as an argument:   $0 youruser@printpi.local"
+  echo "or set the environment:   ETSY_PI_HOST=youruser@printpi.local"
+  exit 2
+fi
+
+# --- is the dashboard actually answering on the forwarded port? ------------
+# A plain TCP check is not enough: `ssh -L` accepts the local connection
+# before it knows whether anything is listening on the far end, so the port
+# looks open while the page would still fail to load. Ask for the page.
+http_ready() {
+  if command -v curl >/dev/null 2>&1; then
+    curl -s -o /dev/null --max-time 3 "$URL"
+    return
+  fi
+  (
+    exec 3<>"/dev/tcp/127.0.0.1/${PORT}" 2>/dev/null || exit 1
+    printf 'GET / HTTP/1.0\r\n\r\n' >&3
+    head -c 12 <&3 | grep -q HTTP
+  ) 2>/dev/null
+}
+
+open_browser() {
+  for opener in xdg-open sensible-browser x-www-browser firefox chromium google-chrome; do
+    if command -v "$opener" >/dev/null 2>&1; then
+      "$opener" "$URL" >/dev/null 2>&1 &
+      return 0
+    fi
+  done
+  echo "No browser launcher found — open this yourself: $URL"
+}
+
+# Already connected from an earlier launch? Just bring up the page again.
+if http_ready; then
+  echo "Dashboard is already reachable at $URL — opening it."
+  open_browser
+  trap - EXIT
+  exit 0
+fi
+
+# --- remote side ----------------------------------------------------------
+# Reuse a dashboard that is already running on the Pi (e.g. its own systemd
+# unit) instead of starting a second one that would fail to bind the port.
+# Single quotes are deliberately absent so the whole thing can be quoted once.
+REMOTE_CMD="
+cd ${REMOTE_DIR} || { echo \"Cannot find ${REMOTE_DIR} on the Pi\"; exit 1; }
+if (exec 3<>/dev/tcp/127.0.0.1/${PORT}) 2>/dev/null; then
+  echo == Dashboard already running on the Pi. Tunnel is open.
+  echo == Leave this window open while you use it; press Ctrl-C to disconnect.
+  while :; do sleep 3600; done
+else
+  echo == Starting the dashboard on the Pi...
+  exec .venv/bin/etsy-auto-print dashboard --port ${PORT}
+fi
+"
+
+echo "Connecting to ${TARGET} ..."
+echo "(enter your Pi password if prompted; the browser opens by itself)"
+echo
+
+# Open the browser as soon as the page actually answers, without blocking ssh.
+# The clock is wall-time, not loop iterations, because each probe can itself
+# take a few seconds. If ssh exits first this subshell is killed, so the
+# give-up message only ever appears while the connection is genuinely up.
+(
+  deadline=$(( $(date +%s) + WAIT_SECONDS ))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    if http_ready; then
+      open_browser
+      exit 0
+    fi
+    sleep 1
+  done
+  echo
+  echo "Still nothing on $URL after ${WAIT_SECONDS}s."
+  echo "The connection is up, so the dashboard itself did not start — the"
+  echo "messages above should say why. Common cause: the dashboard extra is"
+  echo "not installed on the Pi (.venv/bin/pip install -e \".[dashboard]\")."
+) &
+WAITER=$!
+
+# ExitOnForwardFailure: fail loudly if port $PORT is already taken locally,
+# rather than connecting with no working tunnel.
+ssh -t \
+  -o ExitOnForwardFailure=yes \
+  -o ServerAliveInterval=30 \
+  -L "${PORT}:127.0.0.1:${PORT}" \
+  "$TARGET" "$REMOTE_CMD"
+STATUS=$?
+
+kill "$WAITER" 2>/dev/null || true
+wait "$WAITER" 2>/dev/null || true
+
+echo
+if [ "$STATUS" -eq 0 ]; then
+  echo "Disconnected from ${TARGET}."
+else
+  echo "Connection to ${TARGET} ended with status ${STATUS}."
+  echo "If the port was already in use, close the other dashboard window first."
+fi
+exit "$STATUS"
