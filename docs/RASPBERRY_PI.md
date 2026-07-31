@@ -198,8 +198,13 @@ in your browser.
 From the repo on your **desktop** (not the Pi):
 
 ```bash
-./desktop/install-dashboard-shortcut.sh youruser@printpi.local
+./desktop/install-dashboard-shortcut.sh YOURUSER@YOURPI
 ```
+
+Replace **both** halves with your own values — `whoami` on the Pi gives the
+username, `hostname -I` gives its IP. Prefer the IP: `.local` names only work
+if your laptop has mDNS (avahi/nss-mdns) set up, and many don't. The installer
+checks that the name resolves before it writes anything.
 
 That puts "Etsy Label Dashboard" in your applications menu and on your
 desktop. On GNOME, right-click the desktop icon once and choose **Allow
@@ -218,7 +223,7 @@ Don't have a graphical desktop, or want it from a terminal? The same script
 works directly:
 
 ```bash
-./desktop/etsy-dashboard youruser@printpi.local
+./desktop/etsy-dashboard YOURUSER@YOURPI
 ```
 
 Override the defaults with `ETSY_DASHBOARD_PORT` (default 8765) or
@@ -238,7 +243,7 @@ that ignores `Terminal=true`. Running it straight from a terminal you opened
 yourself sidesteps both and shows the error directly:
 
 ```bash
-~/.local/bin/etsy-dashboard youruser@printpi.local
+~/.local/bin/etsy-dashboard YOURUSER@YOURPI
 ```
 
 ### Let the dashboard restart the service

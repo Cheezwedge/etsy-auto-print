@@ -71,7 +71,7 @@ the service log. It binds to localhost; tunnel in with
 pass `--host 0.0.0.0` to use it from your network. Needs
 `pip install -e ".[dashboard]"`.
 
-On a Linux desktop, `./desktop/install-dashboard-shortcut.sh you@your-pi`
+On a Linux desktop, `./desktop/install-dashboard-shortcut.sh YOURUSER@YOURPI`
 installs a launcher that does the whole thing in one click: connects, starts
 the dashboard, forwards the port, opens the browser.
 

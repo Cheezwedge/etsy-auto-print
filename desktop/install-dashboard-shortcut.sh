@@ -18,6 +18,43 @@ if [ -z "$TARGET" ]; then
   exit 2
 fi
 
+# --- check the target before baking it into a launcher --------------------
+# Getting this wrong is invisible until you click the icon, so catch it here.
+
+if [ "$TARGET" = "youruser@printpi.local" ]; then
+  cat >&2 <<'EOF'
+That is the example from the documentation, not your Pi.
+
+Replace both halves with your own:
+    <your Pi username>@<your Pi hostname or IP>
+
+On the Pi, `whoami` gives the username and `hostname -I` gives the IP.
+EOF
+  exit 2
+fi
+
+HOST="${TARGET##*@}"
+if ! getent hosts "$HOST" >/dev/null 2>&1; then
+  cat >&2 <<EOF
+
+Warning: this machine cannot resolve "$HOST".
+
+If that is an mDNS name (anything ending in .local), your laptop needs
+avahi/nss-mdns for it to work, and plenty of setups don't have it. The Pi's
+IP address always works — run \`hostname -I\` on the Pi and use that instead.
+
+EOF
+  if [ -t 0 ]; then
+    read -r -p "Install pointing at \"$HOST\" anyway? [y/N] " REPLY
+    case "$REPLY" in
+      [yY]*) ;;
+      *) echo "Nothing installed."; exit 2 ;;
+    esac
+  else
+    echo "Continuing anyway (not running interactively)." >&2
+  fi
+fi
+
 SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
 BIN_DIR="$HOME/.local/bin"
 APP_DIR="$HOME/.local/share/applications"
