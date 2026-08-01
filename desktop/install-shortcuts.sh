@@ -58,8 +58,13 @@ fi
 SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
 BIN_DIR="$HOME/.local/bin"
 APP_DIR="$HOME/.local/share/applications"
-# A desktop copy is optional — some setups have no ~/Desktop at all.
+# A desktop copy is optional — some setups have no ~/Desktop at all. Note that
+# xdg-user-dir answers with $HOME when there is no Desktop folder configured,
+# so accepting its answer blindly would litter the home directory.
 DESKTOP_DIR="$(xdg-user-dir DESKTOP 2>/dev/null || echo "$HOME/Desktop")"
+if [ "$DESKTOP_DIR" = "$HOME" ] || [ ! -d "$DESKTOP_DIR" ]; then
+  DESKTOP_DIR=""
+fi
 
 mkdir -p "$BIN_DIR" "$APP_DIR"
 install -m 0755 "$SRC_DIR/etsy-dashboard" "$BIN_DIR/etsy-dashboard"
@@ -100,7 +105,7 @@ EOF
 echo "$LAUNCHERS" | while IFS='|' read -r file name exec_cmd icon comment keywords; do
   [ -n "${file:-}" ] || continue
   write_launcher "$APP_DIR/$file.desktop" "$name" "$exec_cmd" "$icon" "$comment" "$keywords"
-  if [ -d "$DESKTOP_DIR" ]; then
+  if [ -n "$DESKTOP_DIR" ]; then
     write_launcher "$DESKTOP_DIR/$file.desktop" "$name" "$exec_cmd" "$icon" "$comment" "$keywords"
     # GNOME requires this before it will run a launcher from the desktop.
     gio set "$DESKTOP_DIR/$file.desktop" metadata::trusted true 2>/dev/null || true
@@ -114,7 +119,7 @@ command -v update-desktop-database >/dev/null 2>&1 &&
 cat <<EOF
 
 Installed the launchers above, in your applications menu$(
-  [ -d "$DESKTOP_DIR" ] && echo " and on your desktop"
+  [ -n "$DESKTOP_DIR" ] && echo " and in $DESKTOP_DIR"
 ).
 
   Etsy Label Dashboard   the web UI — status, config, products, logs
