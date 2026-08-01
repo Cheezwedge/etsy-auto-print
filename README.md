@@ -65,7 +65,8 @@ etsy-auto-print dashboard   # web UI: status, config/products, logs, tests
 
 `etsy-auto-print dashboard` serves a local web UI — system health checks
 (service, Etsy, Shippo, printer, notifications), an order list with retry
-buttons, a spreadsheet-style product editor, a validated config editor, and
+buttons, a spreadsheet-style product editor (paste rows straight from Excel,
+LibreOffice or Google Sheets), a validated config editor, and
 the service log. It binds to localhost; tunnel in with
 `ssh -L 8765:localhost:8765 user@host`, or set `[dashboard] password` and
 pass `--host 0.0.0.0` to use it from your network. Needs

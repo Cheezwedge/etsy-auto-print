@@ -2,7 +2,7 @@ import pytest
 
 pytest.importorskip("flask")
 
-from etsy_auto_print.dashboard import create_app  # noqa: E402
+from etsy_auto_print.dashboard import create_app, parse_pasted_rows  # noqa: E402
 
 CONFIG = """
 [etsy]
@@ -176,3 +176,90 @@ def test_products_apply_shows_checklist(client, app_dir):
 
 def test_plain_status_visit_has_no_checklist(client):
     assert "what to check now" not in client.get("/").get_data(as_text=True).lower()
+
+
+# --- pasting a product list ------------------------------------------------
+
+
+def test_pasted_tab_separated_cells_from_a_spreadsheet():
+    # Copying cells out of Excel/Sheets puts tabs on the clipboard, not commas.
+    rows = parse_pasted_rows("MUG-1\t14\tmedium\tbest seller\nSTICKER\t0.5\tsmall\t")
+    assert rows[0] == {"sku": "MUG-1", "weight_oz": "14", "parcel": "medium",
+                       "notes": "best seller"}
+    assert rows[1]["sku"] == "STICKER" and rows[1]["notes"] == ""
+
+
+def test_pasted_csv_is_accepted_too():
+    rows = parse_pasted_rows("MUG-1,14,medium\nSTICKER,0.5,small")
+    assert [r["sku"] for r in rows] == ["MUG-1", "STICKER"]
+
+
+def test_header_row_maps_columns_in_any_order():
+    rows = parse_pasted_rows(
+        "Notes\tWeight (oz)\tSKU\n"
+        "top seller\t14\tMUG-1"
+    )
+    assert rows == [{"sku": "MUG-1", "weight_oz": "14", "parcel": "",
+                     "notes": "top seller"}]
+
+
+def test_header_is_not_mistaken_for_a_product():
+    rows = parse_pasted_rows("sku,weight_oz\nMUG-1,14")
+    assert len(rows) == 1 and rows[0]["sku"] == "MUG-1"
+
+
+def test_rows_without_a_header_keep_their_first_row():
+    rows = parse_pasted_rows("MUG-1,14\nSTICKER,0.5")
+    assert len(rows) == 2
+
+
+def test_typed_out_ounces_are_tolerated_but_other_units_are_not():
+    # The column's unit is fixed, so "14 oz" is noise. "400 g" must survive
+    # intact to fail loudly at save rather than be read as 400 ounces.
+    rows = parse_pasted_rows("MUG-1,14 oz\nBOWL,400 g")
+    assert rows[0]["weight_oz"] == "14"
+    assert rows[1]["weight_oz"] == "400 g"
+
+
+def test_blank_and_unusable_pastes_are_rejected():
+    for text in ["", "   \n\n  "]:
+        with pytest.raises(ValueError, match="Nothing pasted"):
+            parse_pasted_rows(text)
+    with pytest.raises(ValueError, match="No products found"):
+        parse_pasted_rows(",14,medium\n,0.5,small")
+
+
+def test_import_loads_rows_into_the_editor_without_saving(client, app_dir):
+    before = (app_dir / "items.csv").read_text()
+    resp = client.post(
+        "/items/import",
+        data={"pasted": "NEW-1\t3.5\tsmall\tfrom a sheet", "mode": "replace"},
+        follow_redirects=True,
+    )
+    text = resp.get_data(as_text=True)
+    assert 'value="NEW-1"' in text          # in the table, ready to review
+    assert "nothing is saved" in text.lower()
+    assert (app_dir / "items.csv").read_text() == before   # ...and it wasn't
+
+
+def test_import_replace_drops_existing_rows_from_the_form(client):
+    text = client.post(
+        "/items/import", data={"pasted": "NEW-1,3.5", "mode": "replace"},
+        follow_redirects=True,
+    ).get_data(as_text=True)
+    assert 'value="MUG-1"' not in text
+
+
+def test_import_append_keeps_them(client):
+    text = client.post(
+        "/items/import", data={"pasted": "NEW-1,3.5", "mode": "append"},
+        follow_redirects=True,
+    ).get_data(as_text=True)
+    assert 'value="MUG-1"' in text and 'value="NEW-1"' in text
+
+
+def test_bad_paste_reports_and_changes_nothing(client, app_dir):
+    before = (app_dir / "items.csv").read_text()
+    resp = client.post("/items/import", data={"pasted": "   "}, follow_redirects=True)
+    assert "Nothing pasted" in resp.get_data(as_text=True)
+    assert (app_dir / "items.csv").read_text() == before

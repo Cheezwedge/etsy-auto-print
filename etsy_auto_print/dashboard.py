@@ -23,6 +23,7 @@ import os
 import secrets
 import subprocess
 import tempfile
+import tomllib
 from datetime import datetime
 from functools import wraps
 from pathlib import Path
@@ -41,7 +42,13 @@ from flask import (
 )
 
 from . import checks
-from .config import ConfigError, load_config
+from .config import (
+    CSV_PARCEL_COLUMNS,
+    CSV_SKU_COLUMNS,
+    CSV_WEIGHT_COLUMNS,
+    ConfigError,
+    load_config,
+)
 from .notify import Notifier
 from .slip import render_packing_slip
 from .store import Store
@@ -261,18 +268,41 @@ ITEMS = """
       <span class="muted">“Save &amp; apply” also restarts the service and re-checks status.</span>
     </div>
   </form>
-  <script>
-  function addRow(){
-    const t=document.getElementById('tbl');
-    const r=t.insertRow(-1);
-    r.innerHTML='<td><input name="sku"></td><td><input name="weight_oz" inputmode="decimal"></td>'+
-      '<td><input name="parcel" list="parcels"></td><td><input name="notes"></td>'+
-      '<td><button type="button" onclick="this.closest(\\'tr\\').remove()">✕</button></td>';
-    r.querySelector('input').focus();
-  }
-  </script>
   {% endif %}
 </div>
+
+{% if csv_path %}
+<div class="card">
+  <h2>Paste from a spreadsheet</h2>
+  <p class="muted">Select your rows in Excel, LibreOffice or Google Sheets, copy, and
+     paste them here — tabs or commas both work. A header row is used to find the
+     columns if present; without one the order is
+     <b>sku, weight&nbsp;(oz), parcel, notes</b>. Nothing is saved until you review
+     the table above and press Save.</p>
+  <form method="post" action="{{ url_for('items_import') }}">
+    <textarea name="pasted" rows="6" spellcheck="false"
+              placeholder="MUG-BLUE-12OZ&#9;14&#9;medium&#9;best seller"></textarea>
+    <div class="row">
+      <label><input type="radio" name="mode" value="replace" checked> Replace the list</label>
+      <label><input type="radio" name="mode" value="append"> Add to it</label>
+      <button class="primary" type="submit">Load into the table</button>
+    </div>
+  </form>
+</div>
+{% endif %}
+
+{% if csv_path %}
+<script>
+function addRow(){
+  const t=document.getElementById('tbl');
+  const r=t.insertRow(-1);
+  r.innerHTML='<td><input name="sku"></td><td><input name="weight_oz" inputmode="decimal"></td>'+
+    '<td><input name="parcel" list="parcels"></td><td><input name="notes"></td>'+
+    '<td><button type="button" onclick="this.closest(\\'tr\\').remove()">✕</button></td>';
+  r.querySelector('input').focus();
+}
+</script>
+{% endif %}
 """
 
 CONFIG = """
@@ -417,7 +447,6 @@ def create_app(config_path: Path, password: str | None = None) -> Flask:
 
         # The CSV path lives in raw TOML (load_config folds the file's contents
         # into item_weights_oz, so the path itself isn't on the Config object).
-        import tomllib
         with open(app.config["CONFIG_PATH"], "rb") as f:
             toml_raw = tomllib.load(f)
         rel = toml_raw.get("labels", {}).get("items_csv")
@@ -454,24 +483,44 @@ def create_app(config_path: Path, password: str | None = None) -> Flask:
             _atomic_write(csv_path, buf.getvalue())
             return _finish("products")
 
-        rows = []
-        if csv_path.exists():
-            with open(csv_path, newline="", encoding="utf-8-sig") as f:
-                for r in csv.DictReader(f):
-                    key = {k.lower().strip(): k for k in r if k}
-                    def get(*names):
-                        for n in names:
-                            if n in key:
-                                return (r.get(key[n]) or "").strip()
-                        return ""
-                    if not get("sku"):
-                        continue
-                    rows.append({
-                        "sku": get("sku"),
-                        "weight_oz": get("weight_oz", "weight", "oz"),
-                        "parcel": get("parcel", "box"),
-                        "notes": get("notes", "note"),
-                    })
+        return page(ITEMS, "Products", "items", csv_path=csv_path,
+                    rows=_read_items_csv(csv_path),
+                    parcel_names=sorted(config.labels.parcels))
+
+    @app.route("/items/import", methods=["POST"])
+    @protected
+    def items_import():
+        """Load pasted spreadsheet rows into the editor — without saving.
+
+        Deliberately not a write: an import that silently replaced the file
+        would be the one destructive button on the page. The rows land in the
+        table, the user looks at them, and Save is still Save.
+        """
+        try:
+            config = cfg()
+            with open(app.config["CONFIG_PATH"], "rb") as f:
+                rel = tomllib.load(f).get("labels", {}).get("items_csv")
+        except ConfigError as exc:
+            flash(str(exc), "err")
+            return redirect(url_for("items"))
+        if not rel:
+            return redirect(url_for("items"))
+        csv_path = app.config["CONFIG_PATH"].parent / rel
+
+        try:
+            pasted = parse_pasted_rows(request.form.get("pasted", ""))
+        except ValueError as exc:
+            flash(str(exc), "err")
+            return redirect(url_for("items"))
+
+        rows = pasted
+        if request.form.get("mode") == "append":
+            rows = _read_items_csv(csv_path) + pasted
+        flash(
+            f"Loaded {len(pasted)} product(s) into the table — nothing is saved "
+            "until you press Save.",
+            "ok",
+        )
         return page(ITEMS, "Products", "items", csv_path=csv_path, rows=rows,
                     parcel_names=sorted(config.labels.parcels))
 
@@ -513,6 +562,100 @@ def create_app(config_path: Path, password: str | None = None) -> Flask:
         return redirect(back)
 
     return app
+
+
+_NOTES_COLUMNS = ("notes", "note", "description", "comment")
+
+
+def _row_value(row: dict, candidates) -> str:
+    """Case-insensitive lookup across the spellings a column might have."""
+    lowered = {str(k).lower().strip(): k for k in row if k}
+    for name in candidates:
+        key = name.lower().strip()
+        if key in lowered:
+            return (row.get(lowered[key]) or "").strip()
+    return ""
+
+
+def _read_items_csv(path: Path) -> list[dict]:
+    rows = []
+    if not path.exists():
+        return rows
+    with open(path, newline="", encoding="utf-8-sig") as f:
+        for raw in csv.DictReader(f):
+            sku = _row_value(raw, CSV_SKU_COLUMNS)
+            if not sku:
+                continue
+            rows.append({
+                "sku": sku,
+                "weight_oz": _row_value(raw, CSV_WEIGHT_COLUMNS),
+                "parcel": _row_value(raw, CSV_PARCEL_COLUMNS),
+                "notes": _row_value(raw, _NOTES_COLUMNS),
+            })
+    return rows
+
+
+def _clean_weight(value: str) -> str:
+    """Accept "14 oz" as 14. The column's unit is fixed, so a typed-out "oz"
+    is noise — but anything else (g, lb) is left alone to fail loudly at save
+    rather than be silently misread as ounces."""
+    stripped = value.strip()
+    if stripped.lower().endswith("oz"):
+        stripped = stripped[:-2].strip()
+    return stripped
+
+
+def parse_pasted_rows(text: str) -> list[dict]:
+    """Rows copied out of a spreadsheet.
+
+    Copying cells from Excel, LibreOffice or Google Sheets puts tab-separated
+    text on the clipboard, while an exported file is comma-separated; both are
+    accepted. A header row is used to find the columns when present, since a
+    real product sheet rarely has them in our order — without one, the order
+    is assumed to be sku, weight, parcel, notes.
+    """
+    text = text.strip("\n\r ")
+    if not text:
+        raise ValueError("Nothing pasted.")
+
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    delimiter = "\t" if any("\t" in ln for ln in lines) else ","
+    table = [r for r in csv.reader(lines, delimiter=delimiter) if any(c.strip() for c in r)]
+    if not table:
+        raise ValueError("Nothing pasted.")
+
+    known = {c.lower() for c in (*CSV_SKU_COLUMNS, *CSV_WEIGHT_COLUMNS,
+                                 *CSV_PARCEL_COLUMNS, *_NOTES_COLUMNS)}
+    header = table[0]
+    if any(cell.lower().strip() in known for cell in header):
+        body = [dict(zip(header, r)) for r in table[1:]]
+        rows = [
+            {
+                "sku": _row_value(r, CSV_SKU_COLUMNS),
+                "weight_oz": _clean_weight(_row_value(r, CSV_WEIGHT_COLUMNS)),
+                "parcel": _row_value(r, CSV_PARCEL_COLUMNS),
+                "notes": _row_value(r, _NOTES_COLUMNS),
+            }
+            for r in body
+        ]
+    else:
+        rows = [
+            {
+                "sku": (r[0] if len(r) > 0 else "").strip(),
+                "weight_oz": _clean_weight(r[1] if len(r) > 1 else ""),
+                "parcel": (r[2] if len(r) > 2 else "").strip(),
+                "notes": (r[3] if len(r) > 3 else "").strip(),
+            }
+            for r in table
+        ]
+
+    rows = [r for r in rows if r["sku"]]
+    if not rows:
+        raise ValueError(
+            "No products found in what you pasted — the first column should be "
+            "the SKU, or include a header row with a 'sku' column."
+        )
+    return rows
 
 
 def _atomic_write(path: Path, text: str) -> None:

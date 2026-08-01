@@ -184,6 +184,30 @@ password = "pick-something-long"
 .venv/bin/etsy-auto-print dashboard --host 0.0.0.0
 ```
 
+### Getting your products in
+
+The **Products** tab edits the per-SKU spreadsheet. It only appears once the
+file is named in your config, so first add this under `[labels]` on the
+**Config** tab and hit **Save & apply**:
+
+```toml
+items_csv = "items.csv"
+```
+
+The file itself doesn't have to exist yet — it's created on the first save.
+
+Then either type rows with **Add product**, or, if you already keep your
+products in a spreadsheet, select the cells in Excel / LibreOffice / Google
+Sheets, copy, and paste them into **Paste from a spreadsheet**. Tabs and
+commas both work, a header row is used to find the columns if you include one
+(so your sheet's column order doesn't have to match), and extra columns are
+ignored. Pasted rows land in the table for you to check — nothing is written
+until you press **Save**.
+
+Only `sku` and `weight_oz` really matter: the SKU must match the SKU on the
+Etsy listing exactly, and the weight is what the carrier gets billed on.
+Leave `parcel` blank to use the default box.
+
 To have it always running, copy the systemd unit and change `run` to
 `dashboard` in `ExecStart` (use a distinct unit name, e.g.
 `etsy-auto-print-dashboard.service`).
