@@ -96,6 +96,7 @@ that lets the restart button work without a password.
 ```bash
 etsy-auto-print test-label      # buy + print a TEST label end to end
 etsy-auto-print quote 123       # show rates for a real order, buy nothing
+etsy-auto-print services        # Shippo service tokens for [labels.service_map]
 etsy-auto-print poll            # orders now advance: slip -> label
 etsy-auto-print reprint-label 123
 etsy-auto-print retry 123       # re-run a held order after fixing the cause
@@ -128,6 +129,14 @@ etsy-auto-print test-notify   # should pop up on your phone
 3. Restart `run`. From now on labels cost real postage and each completed
    order is marked shipped on Etsy with tracking (buyer gets Etsy's normal
    shipping-notification email).
+
+### Faster shipping options
+
+If a buyer pays for a shipping upgrade, that exact service is bought rather
+than the cheapest rate — Etsy's six standard USPS services are mapped out of
+the box, and `[labels.service_map]` handles profiles that name them
+differently. An upgrade the map doesn't recognise **holds** the order instead
+of silently shipping it slower than the buyer paid for.
 
 Tracking is uploaded with the shipment details Etsy accepts alongside it —
 service level, package weight and dimensions, what the label cost, and the

@@ -1,12 +1,13 @@
 import pytest
 
-from etsy_auto_print.config import LabelConfig
+from etsy_auto_print.config import DEFAULT_SERVICE_MAP, LabelConfig
 from etsy_auto_print.labels import (
     LabelError,
     Labeler,
     build_address_to,
     compute_parcel,
     pick_rate,
+    required_service,
 )
 from etsy_auto_print.pipeline import advance_order
 from etsy_auto_print.printer import FilePrinter
@@ -34,6 +35,8 @@ def label_config(**overrides) -> LabelConfig:
         default_parcel="default",
         item_weights_oz={"STAND-WAL": 9.5, "": 1.0},
         allowed_providers=["USPS"],
+        service_map=dict(DEFAULT_SERVICE_MAP),
+        hold_unmapped_upgrade=True,
     )
     defaults.update(overrides)
     return LabelConfig(**defaults)

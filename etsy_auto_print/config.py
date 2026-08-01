@@ -24,6 +24,38 @@ class ConfigError(Exception):
     pass
 
 
+def normalize_service(name: str) -> str:
+    """Etsy service names are free text typed into a shipping profile, so
+    compare them case- and whitespace-insensitively."""
+    return " ".join(name.lower().replace("-", " ").split())
+
+
+# Etsy's shipping-service names -> Shippo service level tokens. These are the
+# services Etsy offers for domestic and international USPS shipping; the map
+# exists so that when a buyer pays for a specific one, we buy that exact
+# service instead of whatever happens to be cheapest.
+#
+# Override or extend any of it with [labels.service_map] in config.toml — the
+# names must match what your Etsy shipping profile calls them. Verify the
+# tokens against your own account with: etsy-auto-print services
+DEFAULT_SERVICE_MAP = {
+    normalize_service(k): v
+    for k, v in {
+        "USPS Priority Mail Express": "usps_priority_express",
+        "USPS Priority Mail": "usps_priority",
+        # USPS folded First-Class Package Service into Ground Advantage in
+        # 2023. "First-Class Mail" as a *parcel* service no longer exists, so
+        # the honest equivalent for a package is Ground Advantage. (usps_first
+        # still exists in Shippo, but only for letters and flats.)
+        "USPS First-Class Mail": "usps_ground_advantage",
+        "USPS Ground Advantage": "usps_ground_advantage",
+        "USPS Priority Mail International": "usps_priority_mail_international",
+        "USPS Priority Mail Express International": "usps_priority_mail_express_international",
+        "Standard International": "usps_first_class_package_international_service",
+    }.items()
+}
+
+
 @dataclass
 class LabelConfig:
     enabled: bool
@@ -36,6 +68,8 @@ class LabelConfig:
     default_parcel: str | None
     item_weights_oz: dict
     allowed_providers: list
+    service_map: dict  # normalized Etsy service name -> Shippo servicelevel token
+    hold_unmapped_upgrade: bool
 
     @property
     def parcel(self) -> dict:
@@ -217,6 +251,11 @@ def _load_labels(raw: dict, base: Path) -> LabelConfig:
         default_parcel=default_parcel,
         item_weights_oz=item_weights,
         allowed_providers=list(section.get("allowed_providers", ["USPS"])),
+        service_map={
+            **DEFAULT_SERVICE_MAP,
+            **{normalize_service(k): v for k, v in section.get("service_map", {}).items()},
+        },
+        hold_unmapped_upgrade=bool(section.get("hold_unmapped_upgrade", True)),
     )
 
 

@@ -51,6 +51,30 @@ file_type = "PDF_4x6"
 # Only consider rates from these carriers; empty list = cheapest of any.
 allowed_providers = ["USPS"]
 
+# --- Faster shipping the buyer paid extra for.
+#
+# By default the cheapest allowed rate is bought. That is wrong when a buyer
+# paid for a shipping upgrade: they paid for Priority Mail Express, they
+# should not get Ground Advantage. Etsy reports the upgrade's name on the
+# order, and [labels.service_map] translates that name into the Shippo
+# service to buy.
+#
+# Etsy's six standard USPS services are mapped out of the box, so if your
+# upgrades use their default names there is nothing to do here. Add a line
+# only for a name your shipping profile spells differently:
+#
+# [labels.service_map]
+# "Express (2 day)" = "usps_priority_express"    # your profile's wording
+#
+# Left of "=" is exactly what Etsy calls it (case and spacing don't matter);
+# right of "=" is the Shippo service token. List the real tokens your account
+# quotes with:  etsy-auto-print services
+#
+# An order whose upgrade isn't mapped is HELD rather than shipped as the
+# cheapest option — you paid for the buyer's choice or you hear about it.
+# Set this to false to ship the cheapest rate and just log a warning instead.
+# hold_unmapped_upgrade = true
+
 # Your return address (required when labels are enabled).
 # email is required: USPS rejects purchases without a sender contact email.
 [labels.ship_from]

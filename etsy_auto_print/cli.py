@@ -23,7 +23,14 @@ from . import checks
 from .auth import AuthError, TokenStore, authorize
 from .config import Config, ConfigError, load_config
 from .etsy import EtsyApiError, EtsyClient
-from .labels import LabelError, Labeler, build_address_to, compute_parcel, pick_rate
+from .labels import (
+    LabelError,
+    Labeler,
+    build_address_to,
+    compute_parcel,
+    pick_rate,
+    required_service,
+)
 from .notify import Notifier
 from .pipeline import advance_order, poll_once, reprint
 from .printer import get_printer
@@ -396,15 +403,61 @@ def cmd_quote(config, args) -> int:
     if not rates:
         print("No rates returned.")
         return 1
-    chosen = pick_rate(rates, config.labels.allowed_providers)
+    service = required_service(receipt, config.labels)
+    chosen = pick_rate(rates, config.labels.allowed_providers, service)
     print(f"Parcel: {parcel['weight']} oz  ({'TEST' if client.is_test else 'LIVE'})")
+    if service:
+        print(f"Buyer's shipping service requires: {service}")
+    _print_rates(rates, chosen)
+    return 0
+
+
+def _print_rates(rates: list[dict], chosen: dict | None = None) -> None:
     for r in sorted(rates, key=lambda r: float(r["amount"])):
-        mark = " <== would buy" if r["object_id"] == chosen["object_id"] else ""
+        level = r.get("servicelevel", {})
+        mark = " <== would buy" if chosen and r["object_id"] == chosen["object_id"] else ""
         days = f"~{r['estimated_days']}d" if r.get("estimated_days") else ""
         print(
             f"  {r['amount']:>7} {r['currency']}  {r['provider']:<6} "
-            f"{r.get('servicelevel', {}).get('name', ''):<28}{days}{mark}"
+            f"{level.get('name', ''):<30}{level.get('token', ''):<44}{days}{mark}"
         )
+
+
+def cmd_services(config, args) -> int:
+    """List the service tokens your Shippo account actually quotes.
+
+    The tokens are what [labels.service_map] maps Etsy's service names onto,
+    so this is how you check a mapping is real rather than plausible.
+    """
+    if not config.labels.enabled:
+        print("Labels are not enabled in config.toml.", file=sys.stderr)
+        return 1
+    client = make_client(config.labels.token, config.labels.allow_live)
+    parcel = {
+        "length": config.labels.parcel["length_in"],
+        "width": config.labels.parcel["width_in"],
+        "height": config.labels.parcel["height_in"],
+        "distance_unit": "in",
+        "weight": args.weight_oz,
+        "mass_unit": "oz",
+    }
+    address_to = build_address_to(SAMPLE_RECEIPT)
+    shipment = client.create_shipment(config.labels.ship_from, address_to, parcel)
+    rates = shipment.get("rates", [])
+    if not rates:
+        print("No rates returned — check [labels.ship_from] and your Shippo account.")
+        return 1
+    print(
+        f"Rates for a {args.weight_oz} oz parcel to {address_to['city']}, "
+        f"{address_to['state']} ({'TEST' if client.is_test else 'LIVE'}):\n"
+    )
+    _print_rates(rates)
+    print(
+        "\nThe third column is the Shippo service token. Use it on the right-hand"
+        "\nside of [labels.service_map] in config.toml.\n"
+        "\nNote these are domestic rates to a sample US address — international"
+        "\nservices only appear when quoting an international destination."
+    )
     return 0
 
 
@@ -496,6 +549,15 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("reprint-label", help="re-print an already-purchased label")
     p.add_argument("receipt_id", type=int)
     p.set_defaults(func=cmd_reprint_label)
+
+    p = sub.add_parser(
+        "services", help="list Shippo service tokens for [labels.service_map]"
+    )
+    p.add_argument(
+        "--weight-oz", type=float, default=16.0,
+        help="parcel weight to quote (default 16); services vary by weight",
+    )
+    p.set_defaults(func=cmd_services)
 
     p = sub.add_parser("quote", help="show shipping rates for an order (no purchase)")
     p.add_argument("receipt_id", type=int)

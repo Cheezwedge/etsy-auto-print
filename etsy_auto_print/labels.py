@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 
+from .config import normalize_service
 from .printer import Printer, PrintError
 from .shippo import ShippoClient, ShippoError
 from .store import Store
@@ -127,7 +128,67 @@ def compute_parcel(receipt: dict, label_config) -> dict:
     }
 
 
-def pick_rate(rates: list[dict], allowed_providers: list[str]) -> dict:
+def _service_names(receipt: dict) -> tuple[set[str], set[str]]:
+    """Shipping services named on the order, if any.
+
+    Both live on the transaction, not the receipt: `shipping_upgrade` is what
+    the buyer paid extra for (null unless they chose an upgrade), and
+    `shipping_method` is the profile's service.
+    """
+    upgrades, methods = set(), set()
+    for txn in receipt.get("transactions", []):
+        if (upgrade := (txn.get("shipping_upgrade") or "").strip()):
+            upgrades.add(upgrade)
+        if (method := (txn.get("shipping_method") or "").strip()):
+            methods.add(method)
+    return upgrades, methods
+
+
+def required_service(receipt: dict, label_config) -> str | None:
+    """The Shippo service token this order must ship with, or None for "any".
+
+    The asymmetry here is deliberate. An *upgrade* is money the buyer paid for
+    a named service, so an upgrade we can't translate holds the order rather
+    than quietly shipping something slower. A *method* is just the profile's
+    standard service, which is populated on ordinary orders — holding on one
+    we don't recognise would stop every order in the shop, so an unmapped
+    method falls back to today's behavior (cheapest allowed rate).
+    """
+    upgrades, methods = _service_names(receipt)
+
+    if len(upgrades) > 1:
+        raise LabelError(
+            "order has items with different shipping upgrades "
+            f"({', '.join(sorted(upgrades))}) — one package can only ship one "
+            "way, so split it manually"
+        )
+
+    if upgrades:
+        name = next(iter(upgrades))
+        token = label_config.service_map.get(normalize_service(name))
+        if token:
+            return token
+        if label_config.hold_unmapped_upgrade:
+            raise LabelError(
+                f"buyer paid for shipping upgrade {name!r}, which is not in "
+                f"[labels.service_map] — add a line mapping it to a Shippo "
+                f"service (see: etsy-auto-print services), or set "
+                f"labels.hold_unmapped_upgrade = false to ship the cheapest "
+                f"rate anyway"
+            )
+        log.warning("Unmapped shipping upgrade %r — buying cheapest rate", name)
+        return None
+
+    # No upgrade: honor the standard service only when we recognise it.
+    for name in sorted(methods):
+        if token := label_config.service_map.get(normalize_service(name)):
+            return token
+    return None
+
+
+def pick_rate(
+    rates: list[dict], allowed_providers: list[str], service_token: str | None = None
+) -> dict:
     candidates = [
         r
         for r in rates
@@ -139,6 +200,23 @@ def pick_rate(rates: list[dict], allowed_providers: list[str]) -> dict:
             f"no rates from allowed providers {allowed_providers} "
             f"(available: {providers or 'none'})"
         )
+
+    if service_token:
+        exact = [
+            r for r in candidates
+            if r.get("servicelevel", {}).get("token") == service_token
+        ]
+        if not exact:
+            available = sorted(
+                r.get("servicelevel", {}).get("token", "?") for r in candidates
+            )
+            raise LabelError(
+                f"the order requires {service_token!r} but the carrier did not "
+                f"quote it for this package (available: {', '.join(available)}) "
+                "— the parcel may be too heavy or large for that service"
+            )
+        candidates = exact
+
     return min(candidates, key=lambda r: float(r["amount"]))
 
 
@@ -176,11 +254,12 @@ class Labeler:
             raise LabelError(f"address failed validation: {msgs or 'no details'}")
 
         parcel = compute_parcel(receipt, self.config)
+        service = required_service(receipt, self.config)
         try:
             shipment = self.client.create_shipment(self.config.ship_from, address_to, parcel)
         except ShippoError as exc:
             raise LabelError(f"shipment creation failed: {exc}") from exc
-        rate = pick_rate(shipment.get("rates", []), self.config.allowed_providers)
+        rate = pick_rate(shipment.get("rates", []), self.config.allowed_providers, service)
         log.info(
             "Order #%s: buying %s %s at %s %s (%.2f oz)%s",
             rid,
