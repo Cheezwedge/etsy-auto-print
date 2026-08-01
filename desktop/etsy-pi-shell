@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# One-click: open a terminal logged into the print Pi, already in the project
+# directory, with the commands you actually use printed in front of you.
+#
+# Run by the "Etsy Print Pi (SSH)" desktop launcher, but it works standalone:
+#     ./etsy-pi-shell YOURUSER@YOURPI
+#
+# This is a plain SSH session — no tunnel, no dashboard. Use it for the
+# occasional command, a log tail, or anything the dashboard doesn't cover.
+
+TARGET_ARG="${1:-}"
+LAUNCH_KIND="shell"
+. "$(cd "$(dirname "$0")" && pwd)/etsy-launcher-common.sh"
+
+REMOTE_DIR="${ETSY_PI_DIR:-etsy-auto-print}"
+
+# Single quotes are deliberately absent so the whole thing can be quoted once
+# on the ssh command line. \$ escapes are evaluated on the Pi, not here.
+REMOTE_CMD="
+cd ${REMOTE_DIR} 2>/dev/null
+echo
+echo \"  Etsy print Pi — \$(pwd)\"
+echo
+echo \"    .venv/bin/etsy-auto-print check      every connection, top to bottom\"
+echo \"    .venv/bin/etsy-auto-print status     every order and its state\"
+echo \"    .venv/bin/etsy-auto-print poll       check Etsy for orders right now\"
+echo \"    .venv/bin/etsy-auto-print quote ID   what a label would cost\"
+echo
+echo \"    journalctl -u etsy-auto-print -f     live service log\"
+echo \"    sudo systemctl restart etsy-auto-print\"
+echo
+echo \"  Type exit to close this window.\"
+echo
+exec \$SHELL -l
+"
+
+say "Connecting to ${TARGET} ..."
+echo
+
+ssh -t -o ServerAliveInterval=30 "$TARGET" "$REMOTE_CMD" 2> >(tee -a "$LOG" >&2)
+STATUS=$?
+
+report_ssh_exit "$STATUS"
+
+# A clean logout is the normal way to end this — don't make them press Enter
+# to dismiss a window they just closed on purpose.
+if [ "$STATUS" -eq 0 ]; then
+  trap - EXIT
+fi
+exit "$STATUS"
