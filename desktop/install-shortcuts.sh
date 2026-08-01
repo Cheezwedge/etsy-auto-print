@@ -66,13 +66,19 @@ install -m 0755 "$SRC_DIR/etsy-dashboard" "$BIN_DIR/etsy-dashboard"
 install -m 0755 "$SRC_DIR/etsy-pi-shell" "$BIN_DIR/etsy-pi-shell"
 install -m 0644 "$SRC_DIR/etsy-launcher-common.sh" "$BIN_DIR/etsy-launcher-common.sh"
 
-# name | exec | icon | comment | keywords
+# file | name | Exec command | icon | comment | keywords
+#
+# "Connect to Pi" is deliberately a bare ssh with no wrapper — nothing to go
+# wrong, nothing between you and the session. The cost is that a failed
+# connection closes the window with the error still on it; the wrapped
+# shortcuts above it are the ones that keep the window open and log why.
 LAUNCHERS="
-etsy-auto-print-dashboard|Etsy Label Dashboard|etsy-dashboard|printer|Connect to the print Pi, start the dashboard, and open it in a browser|dashboard;labels;
-etsy-auto-print-shell|Etsy Print Pi (SSH)|etsy-pi-shell|utilities-terminal|Open a terminal logged into the print Pi|ssh;terminal;shell;
+etsy-auto-print-dashboard|Etsy Label Dashboard|$BIN_DIR/etsy-dashboard $TARGET|printer|Connect to the print Pi, start the dashboard, and open it in a browser|dashboard;labels;
+etsy-auto-print-shell|Etsy Print Pi (SSH)|$BIN_DIR/etsy-pi-shell $TARGET|utilities-terminal|Open a terminal on the print Pi, in the project directory|ssh;terminal;shell;
+etsy-auto-print-connect|Connect to Pi|ssh $TARGET|network-server|Plain SSH session on the print Pi|ssh;connect;
 "
 
-write_launcher() {  # $1 = path, $2 = name, $3 = script, $4 = icon, $5 = comment, $6 = keywords
+write_launcher() {  # $1 = path, $2 = name, $3 = exec, $4 = icon, $5 = comment, $6 = keywords
   cat > "$1" <<EOF
 [Desktop Entry]
 Type=Application
@@ -80,7 +86,7 @@ Version=1.0
 Name=$2
 GenericName=Etsy shipping automation
 Comment=$5
-Exec=$BIN_DIR/$3 $TARGET
+Exec=$3
 Icon=$4
 Terminal=true
 Categories=Utility;Network;
@@ -91,11 +97,11 @@ EOF
 }
 
 
-echo "$LAUNCHERS" | while IFS='|' read -r file name script icon comment keywords; do
+echo "$LAUNCHERS" | while IFS='|' read -r file name exec_cmd icon comment keywords; do
   [ -n "${file:-}" ] || continue
-  write_launcher "$APP_DIR/$file.desktop" "$name" "$script" "$icon" "$comment" "$keywords"
+  write_launcher "$APP_DIR/$file.desktop" "$name" "$exec_cmd" "$icon" "$comment" "$keywords"
   if [ -d "$DESKTOP_DIR" ]; then
-    write_launcher "$DESKTOP_DIR/$file.desktop" "$name" "$script" "$icon" "$comment" "$keywords"
+    write_launcher "$DESKTOP_DIR/$file.desktop" "$name" "$exec_cmd" "$icon" "$comment" "$keywords"
     # GNOME requires this before it will run a launcher from the desktop.
     gio set "$DESKTOP_DIR/$file.desktop" metadata::trusted true 2>/dev/null || true
   fi
@@ -107,12 +113,13 @@ command -v update-desktop-database >/dev/null 2>&1 &&
 
 cat <<EOF
 
-Installed the two launchers above, in your applications menu$(
+Installed the launchers above, in your applications menu$(
   [ -d "$DESKTOP_DIR" ] && echo " and on your desktop"
 ).
 
   Etsy Label Dashboard   the web UI — status, config, products, logs
-  Etsy Print Pi (SSH)    a plain terminal on the Pi, for everything else
+  Etsy Print Pi (SSH)    a terminal on the Pi, in the project directory
+  Connect to Pi          just \`ssh $TARGET\`, nothing else
 
 Connects to: $TARGET
 Launch log:  ${XDG_CACHE_HOME:-$HOME/.cache}/etsy-auto-print/launcher.log

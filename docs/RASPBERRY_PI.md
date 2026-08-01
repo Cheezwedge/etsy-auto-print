@@ -190,13 +190,15 @@ To have it always running, copy the systemd unit and change `run` to
 
 ### One-click launchers on your Linux desktop
 
-Two shortcuts, so you never have to remember an SSH command:
+Three shortcuts, so you never have to remember an SSH command:
 
 - **Etsy Label Dashboard** — connects, starts the dashboard if it isn't
   already running, forwards the port, and opens the page in your browser.
-- **Etsy Print Pi (SSH)** — a plain terminal on the Pi, already in the project
+- **Etsy Print Pi (SSH)** — a terminal on the Pi, already in the project
   directory, with the commands you actually use printed in front of you. For
   anything the dashboard doesn't cover.
+- **Connect to Pi** — just `ssh youruser@yourpi` and nothing else, for when
+  you want a bare session.
 
 From the repo on your **desktop** (not the Pi):
 
@@ -222,7 +224,10 @@ It's safe to click when a dashboard is already running on the Pi (its own
 systemd unit, say): it reuses that one rather than trying to start a second.
 And if you click it twice, the second click just re-opens the browser tab.
 
-The SSH shortcut is an ordinary login session — type `exit` to close it.
+Both SSH shortcuts are ordinary login sessions — type `exit` to close them.
+"Connect to Pi" is a bare `ssh` with no wrapper around it, so if the
+connection fails its window closes with the error still on screen; the other
+two keep the window open and log the reason.
 
 Don't have a graphical desktop, or want them from a terminal? Both scripts
 work directly:
