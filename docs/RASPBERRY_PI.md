@@ -244,6 +244,18 @@ To have it always running, copy the systemd unit and change `run` to
 `dashboard` in `ExecStart` (use a distinct unit name, e.g.
 `etsy-auto-print-dashboard.service`).
 
+**After a `git pull`, restart the dashboard too.** It is a separate
+long-lived process from the poller, so `systemctl restart etsy-auto-print`
+does not touch it — and the desktop launcher deliberately reuses a dashboard
+that is already running rather than starting a new one. The version in the
+page header tells you what is actually loaded; compare it with
+`git rev-parse --short HEAD`.
+
+```bash
+sudo systemctl restart etsy-auto-print-dashboard   # if it runs as a service
+pkill -f "etsy-auto-print dashboard"               # otherwise; then relaunch
+```
+
 ### One-click launchers on your Linux desktop
 
 Three shortcuts, so you never have to remember an SSH command:

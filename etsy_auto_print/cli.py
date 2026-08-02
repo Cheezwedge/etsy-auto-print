@@ -22,6 +22,7 @@ from pathlib import Path
 from datetime import datetime
 
 from . import checks
+from .about import version_label
 from .auth import AuthError, TokenStore, authorize
 from .config import Config, ConfigError, load_config
 from .etsy import EtsyApiError, EtsyClient
@@ -162,6 +163,7 @@ def cmd_check(config, args) -> int:
     Exit code 1 if anything failed, so it can drive a shortcut or a cron
     alert without parsing the output.
     """
+    print(f"etsy-auto-print {version_label()}\n")
     results = checks.run_all(config)
     for check in results:
         print(f"[{_CHECK_MARK[check.state]}] {check.name}: {check.detail}")

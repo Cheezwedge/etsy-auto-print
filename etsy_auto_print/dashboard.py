@@ -42,6 +42,7 @@ from flask import (
 )
 
 from . import checks
+from .about import version_label
 from .config import (
     CSV_PARCEL_COLUMNS,
     CSV_SKU_COLUMNS,
@@ -77,6 +78,7 @@ font:15px/1.55 -apple-system,"Segoe UI",Roboto,Helvetica,sans-serif}
 header{background:var(--card);border-bottom:1px solid var(--line);padding:14px 20px;
 display:flex;gap:20px;align-items:center;flex-wrap:wrap;position:sticky;top:0;z-index:5}
 header h1{font-size:15px;margin:0;letter-spacing:.02em}
+.ver{color:var(--sub);font-weight:400;font-size:12px;margin-left:6px}
 nav{display:flex;gap:4px;flex-wrap:wrap}
 nav a{color:var(--sub);text-decoration:none;padding:6px 12px;border-radius:6px;font-size:14px}
 nav a:hover{background:var(--bg)}
@@ -125,7 +127,7 @@ border:1px solid var(--line);color:var(--sub)}
 .state-done{color:var(--ok)}
 </style></head><body>
 <header>
-  <h1>etsy-auto-print</h1>
+  <h1>etsy-auto-print <span class="ver">{{ version }}</span></h1>
   <nav>
     <a href="{{ url_for('status') }}" class="{{ 'on' if page=='status' }}">Status</a>
     <a href="{{ url_for('orders') }}" class="{{ 'on' if page=='orders' }}">Orders</a>
