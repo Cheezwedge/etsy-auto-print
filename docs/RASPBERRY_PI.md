@@ -240,6 +240,35 @@ Only `sku` and `weight_oz` really matter: the SKU must match the SKU on the
 Etsy listing exactly, and the weight is what the carrier gets billed on.
 Leave `parcel` blank to use the default box.
 
+### After adding products — what to test
+
+```bash
+.venv/bin/etsy-auto-print test-order --sku YOUR-SKU          # one product
+.venv/bin/etsy-auto-print test-order --sku A --sku B         # a mixed order
+.venv/bin/etsy-auto-print test-order --sku YOUR-SKU --qty 4  # someone buys four
+```
+
+Each run prints what the carrier was told:
+
+```
+Declared to the carrier: 26.5 oz in a 10.0 x 7.0 x 4.0 in box
+```
+
+1. **Weigh a packed one.** That number should match your scale, including
+   box and padding. Under-declaring is the expensive mistake — USPS bills the
+   difference back to your Shippo account weeks later, and nothing in the
+   pipeline fails, so you won't notice.
+2. **Test every SKU.** A missing weight holds the order; better to find that
+   now than on a real one.
+3. **Test a mixed order** if you use more than one box preset. Everything
+   ships in the largest box involved, and the weight sums across items — this
+   is where a wrong preset shows up.
+4. **Test a bulk quantity.** Weight scales with quantity, box dimensions do
+   not. If four don't fit in that box, set `max_items` on the preset so the
+   order holds instead of shipping a label whose dimensions are a lie.
+5. **Check the slip.** The SKUs and quantities on the printed pick slip
+   should match what you asked for — that's what you'll pack from.
+
 To have it always running, copy the systemd unit and change `run` to
 `dashboard` in `ExecStart` (use a distinct unit name, e.g.
 `etsy-auto-print-dashboard.service`).

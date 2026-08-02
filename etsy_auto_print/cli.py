@@ -250,25 +250,31 @@ def cmd_test_order(config, args) -> int:
             )
             return 1
 
-    # Use a SKU you actually sell where possible: that exercises the real
+    # Use SKUs you actually sell where possible: that exercises the real
     # weight and box lookup instead of only proving the printer works.
     known = sorted(config.labels.item_weights_oz)
-    sku = args.sku or (known[0] if known else "")
-    if args.sku and args.sku not in config.labels.item_weights_oz:
-        print(f"Note: {args.sku!r} has no weight configured — expect a hold.")
+    skus = args.sku or ([known[0]] if known else [""])
+    for sku in skus:
+        if sku and sku not in config.labels.item_weights_oz:
+            print(f"Note: {sku!r} has no weight configured — expect a hold.")
 
+    qty = max(1, args.qty)
     receipt = {
         **SAMPLE_RECEIPT,
-        "transactions": [{
-            "title": f"Test order item ({sku or 'no SKU configured'})",
-            "quantity": 1,
-            "sku": sku,
-            "variations": [],
-        }],
+        "transactions": [
+            {
+                "title": f"Test order item ({sku or 'no SKU configured'})",
+                "quantity": qty,
+                "sku": sku,
+                "variations": [],
+            }
+            for sku in skus
+        ],
     }
+    listed = ", ".join(f"{qty} x {s}" for s in skus if s)
     print(
         f"Fake order #{receipt['receipt_id']}"
-        + (f", SKU {sku}" if sku else " (no SKU — weights not exercised)")
+        + (f": {listed}" if listed else " (no SKU — weights not exercised)")
     )
 
     # A temporary database keeps the fake order out of `status` and out of the
@@ -281,10 +287,18 @@ def cmd_test_order(config, args) -> int:
         advance_order(receipt, store, printer, labeler)
 
         row = store.get(receipt["receipt_id"])
+        label = store.get_label(receipt["receipt_id"])
         print()
         for ev in store.events(receipt["receipt_id"]):
             print(f"  {ev['from_state'] or '-':>14} -> {ev['to_state']:<16}{ev['note']}")
         print()
+        if label and label["weight_oz"]:
+            # The number the carrier bills on. Worth checking against a scale:
+            # under-declaring is charged back weeks later, invisibly.
+            print(
+                f"Declared to the carrier: {label['weight_oz']} oz in a "
+                f"{label['length_in']} x {label['width_in']} x {label['height_in']} in box"
+            )
         if row["state"] == "held":
             print(f"HELD: {row['error']}", file=sys.stderr)
             return 1
@@ -626,7 +640,14 @@ def main(argv: list[str] | None = None) -> int:
         "test-order",
         help="run one fake order through the whole pipeline (slip + label)",
     )
-    p.add_argument("--sku", help="test a specific product's weight and box")
+    p.add_argument(
+        "--sku", action="append",
+        help="test a specific product; repeat it to test a multi-item order",
+    )
+    p.add_argument(
+        "--qty", type=int, default=1,
+        help="quantity of each SKU (default 1) — checks weight scaling and box capacity",
+    )
     p.set_defaults(func=cmd_test_order)
     sub.add_parser("test-notify", help="send a test ntfy notification").set_defaults(
         func=cmd_test_notify

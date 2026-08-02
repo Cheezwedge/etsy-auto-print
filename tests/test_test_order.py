@@ -57,7 +57,12 @@ def fake_shippo(monkeypatch):
 
 
 def run(config, **kw):
-    return cli.cmd_test_order(config, argparse.Namespace(sku=kw.get("sku")))
+    sku = kw.get("sku")
+    if isinstance(sku, str):
+        sku = [sku]
+    return cli.cmd_test_order(
+        config, argparse.Namespace(sku=sku, qty=kw.get("qty", 1))
+    )
 
 
 def test_prints_slip_then_label(config, tmp_path, capsys):
@@ -73,12 +78,12 @@ def test_uses_a_sku_you_actually_sell(config, capsys):
     run(config)
     # Picks the first configured SKU, so the weight and box lookup is real
     # rather than the sample data's placeholder.
-    assert "SKU MUG-BLUE-12OZ" in capsys.readouterr().out
+    assert "1 x MUG-BLUE-12OZ" in capsys.readouterr().out
 
 
 def test_specific_sku_can_be_named(config, capsys):
     run(config, sku="STAND-WAL")
-    assert "SKU STAND-WAL" in capsys.readouterr().out
+    assert "1 x STAND-WAL" in capsys.readouterr().out
 
 
 def test_unknown_sku_warns_and_then_holds(config, capsys):
@@ -86,6 +91,32 @@ def test_unknown_sku_warns_and_then_holds(config, capsys):
     captured = capsys.readouterr()
     assert "no weight configured" in captured.out
     assert "HELD" in captured.err
+
+
+def test_multiple_skus_make_one_multi_item_order(config, capsys):
+    # The case most likely to be misconfigured: weights must sum across items
+    # and the largest box must win.
+    run(config, sku=["MUG-BLUE-12OZ", "STAND-WAL"])
+    out = capsys.readouterr().out
+    assert "1 x MUG-BLUE-12OZ, 1 x STAND-WAL" in out
+    # 3 packaging + 14 + 9.5
+    assert "Declared to the carrier: 26.5 oz" in out
+
+
+def test_quantity_scales_the_declared_weight(config, capsys):
+    run(config, sku="MUG-BLUE-12OZ", qty=3)
+    out = capsys.readouterr().out
+    assert "3 x MUG-BLUE-12OZ" in out
+    assert "Declared to the carrier: 45.0 oz" in out   # 3 packaging + 14*3
+
+
+def test_box_capacity_is_enforced(tmp_path, monkeypatch, capsys):
+    (tmp_path / "config.toml").write_text(
+        CONFIG.replace("packaging_oz = 3.0", "packaging_oz = 3.0\nmax_items = 2")
+    )
+    monkeypatch.chdir(tmp_path)
+    assert run(load_config(tmp_path / "config.toml"), qty=5) == 1
+    assert "max_items = 2" in capsys.readouterr().err
 
 
 def test_the_fake_order_never_lands_in_the_real_database(config, tmp_path):
