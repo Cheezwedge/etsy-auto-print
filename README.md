@@ -99,6 +99,7 @@ that lets the restart button work without a password.
 etsy-auto-print test-order      # one fake order end to end: slip, then label
 etsy-auto-print test-label      # buy + print a TEST label end to end
 etsy-auto-print quote 123       # show rates for a real order, buy nothing
+etsy-auto-print products        # your SKUs, weights and boxes
 etsy-auto-print services        # Shippo service tokens for [labels.service_map]
 etsy-auto-print poll            # orders now advance: slip -> label
 etsy-auto-print reprint-label 123

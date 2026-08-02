@@ -242,11 +242,22 @@ Leave `parcel` blank to use the default box.
 
 ### After adding products — what to test
 
+First see what you have — these are your own SKUs, not examples to copy:
+
 ```bash
-.venv/bin/etsy-auto-print test-order --sku YOUR-SKU          # one product
-.venv/bin/etsy-auto-print test-order --sku A --sku B         # a mixed order
-.venv/bin/etsy-auto-print test-order --sku YOUR-SKU --qty 4  # someone buys four
+.venv/bin/etsy-auto-print products
 ```
+
+Then run each of these with SKUs from that list:
+
+```bash
+.venv/bin/etsy-auto-print test-order --sku <one-of-yours>
+.venv/bin/etsy-auto-print test-order --sku <one> --sku <another>   # mixed order
+.venv/bin/etsy-auto-print test-order --sku <one-of-yours> --qty 4  # bulk buy
+```
+
+(With no `--sku` it uses the first product on your list, which is the fastest
+way to confirm the list loaded at all.)
 
 Each run prints what the carrier was told:
 

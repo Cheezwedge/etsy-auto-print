@@ -45,13 +45,19 @@ class ShippoClient:
         return self.token.startswith(TEST_TOKEN_PREFIX)
 
     def _request(self, method: str, path: str, payload: dict | None = None) -> dict:
-        resp = requests.request(
-            method,
-            f"{BASE}{path}",
-            json=payload,
-            headers={"Authorization": f"ShippoToken {self.token}"},
-            timeout=60,
-        )
+        try:
+            resp = requests.request(
+                method,
+                f"{BASE}{path}",
+                json=payload,
+                headers={"Authorization": f"ShippoToken {self.token}"},
+                timeout=60,
+            )
+        except requests.RequestException as exc:
+            # Never leak a requests exception: callers handle ShippoError by
+            # holding the order, and a dropped connection should hold it, not
+            # take the whole service down mid-poll.
+            raise ShippoError(f"could not reach Shippo: {exc}") from exc
         if resp.status_code >= 400:
             raise ShippoError(f"Shippo API error {resp.status_code}: {resp.text[:400]}")
         return resp.json()
@@ -79,7 +85,10 @@ class ShippoClient:
         )
 
     def download(self, url: str) -> bytes:
-        resp = requests.get(url, timeout=60)
+        try:
+            resp = requests.get(url, timeout=60)
+        except requests.RequestException as exc:
+            raise ShippoError(f"label download failed: {exc}") from exc
         if resp.status_code >= 400:
             raise ShippoError(f"Label download failed ({resp.status_code}): {url}")
         return resp.content

@@ -50,7 +50,14 @@ class EtsyClient:
             "x-api-key": self.config.api_key,
             "Authorization": f"Bearer {self.tokens.access_token()}",
         }
-        resp = requests.request(method, f"{API_BASE}{path}", headers=headers, timeout=30, **kwargs)
+        try:
+            resp = requests.request(
+                method, f"{API_BASE}{path}", headers=headers, timeout=30, **kwargs
+            )
+        except requests.RequestException as exc:
+            # Status 0 marks "never reached Etsy", which callers treat as a
+            # transient failure to retry rather than a rejected request.
+            raise EtsyApiError(0, f"could not reach Etsy: {exc}") from exc
         if resp.status_code == 401 and retry_auth:
             self.tokens.force_refresh()
             return self._request(method, path, retry_auth=False, **kwargs)

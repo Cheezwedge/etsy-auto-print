@@ -8,6 +8,7 @@
     etsy-auto-print show ID           full detail + event history for one order
     etsy-auto-print reprint ID        re-render + re-print a slip (un-holds)
     etsy-auto-print test-slip         print a sample slip with fake data
+    etsy-auto-print products          configured SKUs, weights and boxes
     etsy-auto-print test-order        one fake order, slip + label, end to end
 """
 
@@ -230,6 +231,29 @@ def cmd_test_slip(config, args) -> int:
     return 0
 
 
+def cmd_products(config, args) -> int:
+    """List the SKUs the shop is configured for, and what each ships as."""
+    labels = config.labels
+    if not labels.item_weights_oz:
+        print("No products configured.")
+        print("Add SKUs and weights on the dashboard's Products tab, or in "
+              "[labels.item_weights_oz] / the items CSV.")
+        return 1
+    default = labels.default_parcel or (
+        next(iter(labels.parcels)) if len(labels.parcels) == 1 else None
+    )
+    print(f"{'SKU':<28}{'WEIGHT (OZ)':<14}BOX")
+    for sku in sorted(labels.item_weights_oz):
+        preset = labels.item_parcels.get(sku) or default or "(unset — will hold)"
+        box = labels.parcels.get(preset)
+        dims = (f"{preset}  {box['length_in']}x{box['width_in']}x{box['height_in']} in"
+                if box else preset)
+        print(f"{sku[:26]:<28}{labels.item_weights_oz[sku]:<14}{dims}")
+    print(f"\n{len(labels.item_weights_oz)} product(s). "
+          "Weights are the item alone; each box adds its own packaging_oz.")
+    return 0
+
+
 def cmd_test_order(config, args) -> int:
     """Run one fake order through the real pipeline: slip, then label.
 
@@ -254,9 +278,20 @@ def cmd_test_order(config, args) -> int:
     # weight and box lookup instead of only proving the printer works.
     known = sorted(config.labels.item_weights_oz)
     skus = args.sku or ([known[0]] if known else [""])
-    for sku in skus:
-        if sku and sku not in config.labels.item_weights_oz:
-            print(f"Note: {sku!r} has no weight configured — expect a hold.")
+    unknown = [s for s in skus if s and s not in config.labels.item_weights_oz]
+    if unknown:
+        # Naming the SKUs you *do* have turns "expect a hold" into something
+        # you can act on — usually the answer is a typo or a docs placeholder.
+        print(f"{', '.join(repr(s) for s in unknown)} not in your product list.")
+        if known:
+            listed = ", ".join(known[:10]) + (" ..." if len(known) > 10 else "")
+            print(f"You have: {listed}")
+            print("Expect a hold. Run `etsy-auto-print products` for the full list.")
+        else:
+            print(
+                "Your product list is empty — add SKUs and weights on the "
+                "dashboard's Products tab first."
+            )
 
     qty = max(1, args.qty)
     receipt = {
@@ -635,6 +670,10 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("test-label", help="buy + print a Shippo TEST label").set_defaults(
         func=cmd_test_label
     )
+
+    sub.add_parser(
+        "products", help="list your configured SKUs, weights and boxes"
+    ).set_defaults(func=cmd_products)
 
     p = sub.add_parser(
         "test-order",

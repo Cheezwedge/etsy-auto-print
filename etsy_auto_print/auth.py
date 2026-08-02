@@ -83,22 +83,28 @@ class TokenStore:
         self._save()
 
     def _refresh(self) -> None:
-        resp = requests.post(
-            TOKEN_URL,
-            json={
-                "grant_type": "refresh_token",
-                "client_id": self.config.keystring,
-                "refresh_token": self._data["refresh_token"],
-            },
-            headers={"x-api-key": self.config.api_key},
-            timeout=30,
-        )
+        try:
+            resp = self._post_token(
+                TOKEN_URL,
+                json={
+                    "grant_type": "refresh_token",
+                    "client_id": self.config.keystring,
+                    "refresh_token": self._data["refresh_token"],
+                },
+                headers={"x-api-key": self.config.api_key},
+            )
+        except requests.RequestException as exc:
+            raise AuthError(f"could not reach Etsy to refresh the token: {exc}") from exc
         if resp.status_code != 200:
             raise AuthError(
                 f"Token refresh failed ({resp.status_code}): {resp.text[:300]}. "
                 "If the refresh token expired, run: etsy-auto-print auth"
             )
         self.store_grant(resp.json())
+
+    @staticmethod
+    def _post_token(url, *, json, headers):
+        return requests.post(url, json=json, headers=headers, timeout=30)
 
     def _save(self) -> None:
         self.path.write_text(json.dumps(self._data, indent=2))
