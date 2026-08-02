@@ -37,6 +37,7 @@ def label_config(**overrides) -> LabelConfig:
         allowed_providers=["USPS"],
         service_map=dict(DEFAULT_SERVICE_MAP),
         hold_unmapped_upgrade=True,
+        validate_addresses=True,
     )
     defaults.update(overrides)
     return LabelConfig(**defaults)
@@ -211,13 +212,45 @@ def test_failed_purchase_holds_order(store, printer, receipt):
     assert "carrier rejected" in row["error"]
 
 
+class LiveFake(FakeShippo):
+    is_test = False
+
+
 def test_invalid_address_holds_before_purchase(store, printer, receipt):
     store.register(receipt)
-    client = FakeShippo(invalid_address=True)
+    client = LiveFake(invalid_address=True)
     labeler = make_labeler(store, printer, client)
     advance_order(receipt, store, printer, labeler)
     assert store.get(12345)["state"] == "held"
     assert client.buy_calls == 0
+
+
+def test_test_mode_ignores_address_validation(store, printer, receipt):
+    """A test token has no address data behind it, so it calls good addresses
+    invalid. Blocking on that would stop any test order reaching the label
+    step, and a test label is never shipped to anyone."""
+    store.register(receipt)
+    client = FakeShippo(invalid_address=True)     # is_test = True
+    advance_order(receipt, store, printer, make_labeler(store, printer, client))
+    assert store.get(12345)["state"] == "label_printed"
+    assert client.buy_calls == 1
+
+
+def test_validation_can_be_turned_off_for_live_orders(store, printer, receipt):
+    # Carriers do reject genuinely deliverable addresses (new builds, rural
+    # routes); this is the escape hatch, and it must be explicit.
+    store.register(receipt)
+    client = LiveFake(invalid_address=True)
+    labeler = make_labeler(store, printer, client, validate_addresses=False)
+    advance_order(receipt, store, printer, labeler)
+    assert store.get(12345)["state"] == "label_printed"
+
+
+def test_hold_message_points_at_the_escape_hatch(store, printer, receipt):
+    store.register(receipt)
+    advance_order(receipt, store, printer,
+                  make_labeler(store, printer, LiveFake(invalid_address=True)))
+    assert "validate_addresses" in store.get(12345)["error"]
 
 
 def test_unrecorded_attempt_blocks_repurchase(store, printer, receipt):

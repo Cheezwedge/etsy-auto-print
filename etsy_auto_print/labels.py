@@ -251,7 +251,29 @@ class Labeler:
         validation = created.get("validation_results") or {}
         if validation.get("is_valid") is False:
             msgs = "; ".join(m.get("text", "") for m in validation.get("messages", []))
-            raise LabelError(f"address failed validation: {msgs or 'no details'}")
+            # A test token has no real address data behind it, so it reports
+            # perfectly good addresses as invalid. Blocking on that would mean
+            # no test order could ever reach the label step — and a test label
+            # is never shipped to anyone, so there is nothing to protect.
+            if self.client.is_test:
+                log.warning(
+                    "Order #%s: address validation says %s — ignoring, because a "
+                    "TEST token cannot validate addresses. This check is live "
+                    "in production.",
+                    rid, msgs or "invalid",
+                )
+            elif not self.config.validate_addresses:
+                log.warning(
+                    "Order #%s: address validation says %s — continuing anyway "
+                    "(labels.validate_addresses = false)", rid, msgs or "invalid",
+                )
+            else:
+                raise LabelError(
+                    f"address failed validation: {msgs or 'no details'} — check the "
+                    "buyer's address on Etsy. If it is genuinely deliverable and "
+                    "the carrier just doesn't recognise it (common for new builds "
+                    "and rural routes), set labels.validate_addresses = false"
+                )
 
         parcel = compute_parcel(receipt, self.config)
         service = required_service(receipt, self.config)

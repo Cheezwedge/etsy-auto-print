@@ -89,6 +89,12 @@ allowed_providers = ["USPS"]
 # Set this to false to ship the cheapest rate and just log a warning instead.
 # hold_unmapped_upgrade = true
 
+# Buyer addresses are checked with the carrier before postage is bought, and
+# an address that fails is HELD rather than shipped into the void. Carriers do
+# sometimes fail to recognise genuinely deliverable addresses (new builds,
+# rural routes) — set this to false if that becomes a nuisance.
+# validate_addresses = true
+
 # Your return address (required when labels are enabled).
 # email is required: USPS rejects purchases without a sender contact email.
 [labels.ship_from]

@@ -70,6 +70,7 @@ class LabelConfig:
     allowed_providers: list
     service_map: dict  # normalized Etsy service name -> Shippo servicelevel token
     hold_unmapped_upgrade: bool
+    validate_addresses: bool
 
     @property
     def parcel(self) -> dict:
@@ -257,6 +258,7 @@ def _load_labels(raw: dict, base: Path) -> LabelConfig:
             **{normalize_service(k): v for k, v in section.get("service_map", {}).items()},
         },
         hold_unmapped_upgrade=bool(section.get("hold_unmapped_upgrade", True)),
+        validate_addresses=bool(section.get("validate_addresses", True)),
     )
 
 
