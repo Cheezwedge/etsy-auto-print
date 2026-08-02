@@ -145,8 +145,17 @@ printed — a raw ZPL label queue can't render plain text.
 Test the physical printer:
 
 ```bash
-.venv/bin/etsy-auto-print test-label   # should come out of the printer
+.venv/bin/etsy-auto-print test-order   # a whole fake order: slip, then label
 ```
+
+This runs one fake order through the same code a real order takes, so what
+comes out is exactly what you'd get unattended — with `slip_format = "zpl"`,
+two labels back to back. It uses the first SKU in your product list (or
+`--sku MUG-1` to test a specific one), so it also checks that product's
+weight and box are configured. Nothing is written to your order database and
+nothing reaches Etsy; it refuses to run on a live Shippo token.
+
+`test-slip` and `test-label` still exist if you want one or the other alone.
 
 Check the barcode scans with any phone barcode-scanner app.
 

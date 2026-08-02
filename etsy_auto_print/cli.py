@@ -8,6 +8,7 @@
     etsy-auto-print show ID           full detail + event history for one order
     etsy-auto-print reprint ID        re-render + re-print a slip (un-holds)
     etsy-auto-print test-slip         print a sample slip with fake data
+    etsy-auto-print test-order        one fake order, slip + label, end to end
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+import tempfile
 import time
 from pathlib import Path
 from datetime import datetime
@@ -223,6 +225,78 @@ def cmd_test_slip(config, args) -> int:
     print(f"Sample slip -> {destination}")
     if config.slip_format == "zpl":
         print("Rendered as ZPL for the label printer (printer.slip_format = \"zpl\").")
+    return 0
+
+
+def cmd_test_order(config, args) -> int:
+    """Run one fake order through the real pipeline: slip, then label.
+
+    Unlike test-slip and test-label, this goes through advance_order — the
+    same code a live order takes — so what comes out of the printer is
+    exactly what an unattended order would produce, in the same order.
+    """
+    printer = get_printer(config)
+
+    client = None
+    if config.labels.enabled:
+        client = make_client(config.labels.token, config.labels.allow_live)
+        if not client.is_test:
+            print(
+                "Refusing: test-order requires a shippo_test_ token — with a live "
+                "token this would buy real postage for a fake address.",
+                file=sys.stderr,
+            )
+            return 1
+
+    # Use a SKU you actually sell where possible: that exercises the real
+    # weight and box lookup instead of only proving the printer works.
+    known = sorted(config.labels.item_weights_oz)
+    sku = args.sku or (known[0] if known else "")
+    if args.sku and args.sku not in config.labels.item_weights_oz:
+        print(f"Note: {args.sku!r} has no weight configured — expect a hold.")
+
+    receipt = {
+        **SAMPLE_RECEIPT,
+        "transactions": [{
+            "title": f"Test order item ({sku or 'no SKU configured'})",
+            "quantity": 1,
+            "sku": sku,
+            "variations": [],
+        }],
+    }
+    print(
+        f"Fake order #{receipt['receipt_id']}"
+        + (f", SKU {sku}" if sku else " (no SKU — weights not exercised)")
+    )
+
+    # A temporary database keeps the fake order out of `status` and out of the
+    # idempotency records that protect real orders.
+    with tempfile.TemporaryDirectory() as tmp:
+        store = Store(Path(tmp) / "test-orders.db")
+        labeler = Labeler(config.labels, store, printer, client) if client else None
+        store.register(receipt)
+        # No Etsy client is passed, so nothing is ever posted to your shop.
+        advance_order(receipt, store, printer, labeler)
+
+        row = store.get(receipt["receipt_id"])
+        print()
+        for ev in store.events(receipt["receipt_id"]):
+            print(f"  {ev['from_state'] or '-':>14} -> {ev['to_state']:<16}{ev['note']}")
+        print()
+        if row["state"] == "held":
+            print(f"HELD: {row['error']}", file=sys.stderr)
+            return 1
+
+    if not config.labels.enabled:
+        print("Labels are disabled, so only the slip printed "
+              "(set [labels] enabled = true to test both).")
+    elif config.slip_format == "zpl":
+        print("Two labels should have printed: the pick slip, then the shipping "
+              "label. They come out paired like this for every real order.")
+    else:
+        print("The shipping label printed. The slip went to "
+              f"{'the slip queue' if config.slip_queue else 'the outbox as a file'} — "
+              'set printer.slip_format = "zpl" to print it on the label printer.')
     return 0
 
 
@@ -545,6 +619,13 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("test-label", help="buy + print a Shippo TEST label").set_defaults(
         func=cmd_test_label
     )
+
+    p = sub.add_parser(
+        "test-order",
+        help="run one fake order through the whole pipeline (slip + label)",
+    )
+    p.add_argument("--sku", help="test a specific product's weight and box")
+    p.set_defaults(func=cmd_test_order)
     sub.add_parser("test-notify", help="send a test ntfy notification").set_defaults(
         func=cmd_test_notify
     )
