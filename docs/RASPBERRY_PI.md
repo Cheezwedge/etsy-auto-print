@@ -223,7 +223,10 @@ file is named in your config, so first add this under `[labels]` on the
 items_csv = "items.csv"
 ```
 
-The file itself doesn't have to exist yet — it's created on the first save.
+Saving creates the file with its header row for you. (A missing products
+file is otherwise a hard config error, deliberately: a typo'd path that
+quietly loaded no weights would hold every order later with a confusing
+message instead of naming the real problem.)
 
 Then either type rows with **Add product**, or, if you already keep your
 products in a spreadsheet, select the cells in Excel / LibreOffice / Google

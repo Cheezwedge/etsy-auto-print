@@ -530,6 +530,13 @@ def create_app(config_path: Path, password: str | None = None) -> Flask:
         path: Path = app.config["CONFIG_PATH"]
         if request.method == "POST":
             text = request.form.get("text", "")
+            created = _ensure_items_csv(text, path)
+            if created:
+                flash(
+                    f"Created {created} with a header row — add your products on "
+                    "the Products tab.",
+                    "ok",
+                )
             try:
                 _validate_config_text(text, path)
             except (ConfigError, Exception) as exc:
@@ -656,6 +663,34 @@ def parse_pasted_rows(text: str) -> list[dict]:
             "the SKU, or include a header row with a 'sku' column."
         )
     return rows
+
+
+ITEMS_HEADER = "sku,weight_oz,parcel,notes\n"
+
+
+def _ensure_items_csv(text: str, config_path: Path) -> Path | None:
+    """Create the products sheet when a saved config first names one.
+
+    Without this the editor can't be bootstrapped: validation refuses a
+    config pointing at a file that doesn't exist, and the Products tab that
+    would create the file only appears once the config points at it. The
+    loader still treats a missing file as an error — a typo'd path must not
+    silently mean "no weights", which would hold every order later.
+
+    Returns the path if it created one, else None. Never overwrites.
+    """
+    try:
+        rel = tomllib.loads(text).get("labels", {}).get("items_csv")
+    except tomllib.TOMLDecodeError:
+        return None  # invalid TOML is the validator's error to report
+    if not rel:
+        return None
+    path = config_path.parent / str(rel)
+    if path.exists():
+        return None
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(ITEMS_HEADER)
+    return path
 
 
 def _atomic_write(path: Path, text: str) -> None:

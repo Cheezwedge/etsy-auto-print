@@ -146,9 +146,13 @@ def _load_items_csv(path: Path) -> tuple[dict, dict]:
     Returns (weights_by_sku, parcels_by_sku).
     """
     if not path.exists():
+        # Deliberately an error rather than "no products": a typo'd path that
+        # quietly loaded nothing would hold every order later with a confusing
+        # "no weight configured" instead of naming the real problem.
         raise ConfigError(
-            f"labels.items_csv points at {path}, which does not exist. "
-            "Create it with a header row: sku,weight_oz,parcel"
+            f"labels.items_csv points at {path}, which does not exist. Create it:\n"
+            f"    printf 'sku,weight_oz,parcel,notes\\n' > {path}\n"
+            "(the dashboard's Config tab creates it for you when you save)"
         )
 
     weights: dict[str, float] = {}

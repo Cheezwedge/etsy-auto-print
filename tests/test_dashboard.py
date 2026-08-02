@@ -178,6 +178,33 @@ def test_plain_status_visit_has_no_checklist(client):
     assert "what to check now" not in client.get("/").get_data(as_text=True).lower()
 
 
+def test_naming_a_new_products_file_creates_it(client, app_dir):
+    """Bootstrap: validation rejects a config pointing at a missing file, and
+    the Products tab only appears once the config points at one. Saving the
+    config has to break that circle."""
+    before = (app_dir / "config.toml").read_text()
+    resp = client.post(
+        "/config",
+        data={"text": before.replace('items_csv = "items.csv"', 'items_csv = "new.csv"')},
+        follow_redirects=True,
+    )
+    assert (app_dir / "new.csv").read_text() == "sku,weight_oz,parcel,notes\n"
+    assert "Created" in resp.get_data(as_text=True)
+    assert 'items_csv = "new.csv"' in (app_dir / "config.toml").read_text()
+
+
+def test_an_existing_products_file_is_never_overwritten(client, app_dir):
+    before = (app_dir / "config.toml").read_text()
+    products = (app_dir / "items.csv").read_text()
+    client.post("/config", data={"text": before}, follow_redirects=True)
+    assert (app_dir / "items.csv").read_text() == products
+
+
+def test_no_file_is_created_from_unparseable_config(client, app_dir):
+    client.post("/config", data={"text": "not = = valid"}, follow_redirects=True)
+    assert sorted(p.name for p in app_dir.glob("*.csv")) == ["items.csv"]
+
+
 # --- pasting a product list ------------------------------------------------
 
 
