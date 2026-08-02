@@ -115,12 +115,32 @@ instructions, create the queue in the CUPS web UI
 drivers, the printer may still work in raw mode if it accepts TSPL/ZPL —
 test with a small file before giving up.
 
-**Packing slips:** with a raw label queue, plain-text slips can't go to the
-label printer, so by default they stay in `outbox/` as files. If you have a
-regular paper printer, add it as a second CUPS queue and set
-`slip_queue = "paper"` in `[printer]` — slips will print there. (You can
-also print ZPL-rendered slips on the label printer; open an issue if you
-want that — not built yet.)
+**Packing slips — how you tell one label from another.** A shipping label
+carries the buyer's address and the postage barcode; it says nothing about
+what goes in the box. With several orders printing unattended you'd have a
+stack of labels and no way to pack from them. Pick one of:
+
+```toml
+[printer]
+slip_format = "zpl"    # slip prints on the LABEL printer, as a 4x6 label
+```
+
+Each order then produces **two labels back to back**: a pick slip (order
+number as text *and* a scannable Code 128 barcode, buyer, every SKU with its
+quantity, variations, gift message, buyer note), then that order's shipping
+label. They come out as a pair, in order — pack straight off the stack. This
+is the right choice when the label printer is the only printer you own.
+
+```toml
+[printer]
+slip_queue = "paper"   # slip prints as plain text on a second CUPS queue
+```
+
+Use this instead if you have a regular printer and want a full-page slip.
+The two settings are mutually exclusive and the config editor rejects both.
+
+With neither set, slips are written to `outbox/` as `.txt` files and never
+printed — a raw ZPL label queue can't render plain text.
 
 Test the physical printer:
 

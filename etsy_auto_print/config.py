@@ -90,6 +90,7 @@ class Config:
     outbox: Path
     cups_queue: str | None
     slip_queue: str | None
+    slip_format: str
     db_path: Path
     tokens_path: Path
     labels: LabelConfig
@@ -301,6 +302,17 @@ def load_config(path: str | Path | None = None) -> Config:
     if backend == "cups" and not cups_queue:
         raise ConfigError("printer.cups_queue is required when printer.backend = 'cups'")
 
+    slip_format = str(printer.get("slip_format", "text")).lower()
+    if slip_format not in ("text", "zpl"):
+        raise ConfigError(
+            f"printer.slip_format must be 'text' or 'zpl', not {slip_format!r}"
+        )
+    if slip_format == "zpl" and printer.get("slip_queue"):
+        raise ConfigError(
+            "printer.slip_format = 'zpl' prints slips on the label printer, so "
+            "printer.slip_queue must not be set — remove one of the two."
+        )
+
     return Config(
         keystring=keystring,
         shared_secret=shared_secret,
@@ -311,6 +323,7 @@ def load_config(path: str | Path | None = None) -> Config:
         outbox=base / printer.get("outbox", "outbox"),
         cups_queue=cups_queue,
         slip_queue=printer.get("slip_queue"),
+        slip_format=slip_format,
         db_path=base / paths.get("db", "orders.db"),
         tokens_path=base / paths.get("tokens", "tokens.json"),
         labels=_load_labels(raw, base),

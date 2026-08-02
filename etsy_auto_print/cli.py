@@ -37,6 +37,7 @@ from .printer import get_printer
 from .shippo import ShippoError, make_client
 from .slip import render_packing_slip
 from .store import Store
+from .zpl import render_slip_zpl
 
 SAMPLE_RECEIPT = {
     "receipt_id": 999999999,
@@ -214,8 +215,14 @@ def cmd_reprint(config, args) -> int:
 
 def cmd_test_slip(config, args) -> int:
     printer = get_printer(config)
-    destination = printer.print_text("packing-slip-SAMPLE", render_packing_slip(SAMPLE_RECEIPT))
+    destination = printer.print_slip(
+        "packing-slip-SAMPLE",
+        render_packing_slip(SAMPLE_RECEIPT),
+        render_slip_zpl(SAMPLE_RECEIPT),
+    )
     print(f"Sample slip -> {destination}")
+    if config.slip_format == "zpl":
+        print("Rendered as ZPL for the label printer (printer.slip_format = \"zpl\").")
     return 0
 
 

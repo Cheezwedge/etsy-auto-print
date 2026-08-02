@@ -27,9 +27,23 @@ interval_seconds = 180
 backend = "file"
 outbox = "outbox"
 # cups_queue = "label"   # label queue, required when backend = "cups"
-# slip_queue = "paper"   # optional second queue for packing slips (a regular
-#                        # printer). If unset, slips stay in the outbox —
-#                        # a raw ZPL label queue can't print plain text.
+#
+# Where the packing slip goes. Pick ONE of:
+#
+#   slip_format = "zpl"    Print the slip on the LABEL printer as a 4x6 label,
+#                          immediately before that order's shipping label, so
+#                          the two come out as a pair. Best if the label
+#                          printer is the only printer you have — a shipping
+#                          label carries no SKU, so without this there is
+#                          nothing tying a label to what goes in the box.
+#
+#   slip_queue = "paper"   Print slips on a second CUPS queue (a regular
+#                          printer) as plain text.
+#
+# With neither, slips are written to the outbox as .txt files and never
+# printed: a raw ZPL label queue cannot render plain text.
+# slip_format = "zpl"
+# slip_queue = "paper"
 
 [paths]
 db = "orders.db"

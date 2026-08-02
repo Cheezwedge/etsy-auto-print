@@ -26,11 +26,28 @@ class Printer:
         """Print a binary document (pdf/png/zpl). Returns the destination."""
         raise NotImplementedError
 
+    def print_slip(self, name: str, text: str, zpl: bytes) -> str:
+        """Print a packing slip, given both renderings of it.
+
+        The caller can't know which form a given setup needs — a plain-paper
+        queue wants the text, a lone label printer wants the ZPL — so it hands
+        over both and the backend picks. Defaults to text.
+        """
+        return self.print_text(name, text)
+
 
 class FilePrinter(Printer):
-    def __init__(self, outbox: Path):
+    def __init__(self, outbox: Path, slip_zpl: bool = False):
         self.outbox = outbox
+        self.slip_zpl = slip_zpl
         outbox.mkdir(parents=True, exist_ok=True)
+
+    def print_slip(self, name: str, text: str, zpl: bytes) -> str:
+        # Mirror what the real printer would receive, so a dry run on the
+        # desktop shows the same thing the Pi would produce.
+        if self.slip_zpl:
+            return self.print_bytes(name, zpl, "zpl")
+        return self.print_text(name, text)
 
     def print_text(self, name: str, content: str) -> str:
         path = self.outbox / f"{name}.txt"
@@ -69,9 +86,11 @@ class SplitPrinter(Printer):
     """Slips and labels can go to different places: a raw ZPL label queue
     can't render plain text, so slips route to a second queue or the outbox."""
 
-    def __init__(self, slip_printer: Printer, label_printer: Printer):
+    def __init__(self, slip_printer: Printer, label_printer: Printer,
+                 slip_zpl: bool = False):
         self.slip_printer = slip_printer
         self.label_printer = label_printer
+        self.slip_zpl = slip_zpl
 
     def print_text(self, name: str, content: str) -> str:
         return self.slip_printer.print_text(name, content)
@@ -79,8 +98,17 @@ class SplitPrinter(Printer):
     def print_bytes(self, name: str, data: bytes, ext: str) -> str:
         return self.label_printer.print_bytes(name, data, ext)
 
+    def print_slip(self, name: str, text: str, zpl: bytes) -> str:
+        # ZPL slips go to the *label* queue on purpose: they come out of the
+        # same printer, immediately before that order's shipping label, so the
+        # pair is physically adjacent in the stack.
+        if self.slip_zpl:
+            return self.label_printer.print_bytes(name, zpl, "zpl")
+        return self.slip_printer.print_text(name, text)
+
 
 def get_printer(config: Config) -> Printer:
+    slip_zpl = config.slip_format == "zpl"
     if config.printer_backend == "cups":
         label_printer = CupsPrinter(config.cups_queue)
         if config.slip_queue:
@@ -88,5 +116,5 @@ def get_printer(config: Config) -> Printer:
         else:
             # No separate slip printer: keep slips as files in the outbox.
             slip_printer = FilePrinter(config.outbox)
-        return SplitPrinter(slip_printer, label_printer)
-    return FilePrinter(config.outbox)
+        return SplitPrinter(slip_printer, label_printer, slip_zpl=slip_zpl)
+    return FilePrinter(config.outbox, slip_zpl=slip_zpl)

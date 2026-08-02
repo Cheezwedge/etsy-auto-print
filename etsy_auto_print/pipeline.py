@@ -16,6 +16,7 @@ from .labels import LabelError, Labeler
 from .notify import Notifier
 from .printer import Printer, PrintError
 from .slip import render_packing_slip
+from .zpl import render_slip_zpl
 from .store import Store
 
 log = logging.getLogger("etsy-auto-print")
@@ -74,8 +75,11 @@ def advance_order(
 
     if store.get(rid)["state"] == "new":
         try:
-            slip = render_packing_slip(receipt)
-            destination = printer.print_text(f"packing-slip-{rid}", slip)
+            destination = printer.print_slip(
+                f"packing-slip-{rid}",
+                render_packing_slip(receipt),
+                render_slip_zpl(receipt),
+            )
         except PrintError as exc:
             hold(str(exc))
             return False
@@ -189,8 +193,11 @@ def reprint(receipt_id: int, store: Store, printer: Printer) -> str:
     receipt = store.get_receipt_json(receipt_id)
     if receipt is None:
         raise KeyError(f"Order #{receipt_id} not found in the local database")
-    slip = render_packing_slip(receipt)
-    destination = printer.print_text(f"packing-slip-{receipt_id}", slip)
+    destination = printer.print_slip(
+        f"packing-slip-{receipt_id}",
+        render_packing_slip(receipt),
+        render_slip_zpl(receipt),
+    )
     if store.get(receipt_id)["state"] == "held":
         store.transition(receipt_id, "slip_printed", f"reprint -> {destination}")
     return destination

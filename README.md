@@ -174,7 +174,15 @@ DYMO 4XL, Zebra…). Set it up as a CUPS queue, then in `config.toml`:
 [printer]
 backend = "cups"
 cups_queue = "label"   # your CUPS queue name
+slip_format = "zpl"    # print the packing slip on it too, as a 4x6 label
 ```
+
+`slip_format = "zpl"` matters if the label printer is your only printer: a
+shipping label carries no SKU, so each order prints a pick slip (order number
+plus a scannable barcode, buyer, every SKU and quantity, gift message)
+immediately before its shipping label. The two come out as a pair. With a
+regular printer available, `slip_queue = "paper"` prints plain-text slips
+there instead.
 
 ## Development
 
