@@ -37,7 +37,7 @@ from .labels import (
 )
 from .notify import Notifier
 from .pipeline import advance_order, poll_once, reprint
-from .printer import get_printer
+from .printer import FilePrinter, get_printer
 from .shippo import ShippoError, make_client
 from .slip import render_packing_slip
 from .store import Store
@@ -46,11 +46,13 @@ from .zpl import render_slip_zpl
 SAMPLE_RECEIPT = {
     "receipt_id": 999999999,
     "name": "Jane Sample",
-    "first_line": "123 Example Street",
-    "second_line": "Apt 4B",
-    "city": "Portland",
-    "state": "OR",
-    "zip": "97201",
+    # A real, deliverable address: carriers reject invented streets even in
+    # test mode, and they do it at purchase time rather than when quoting.
+    "first_line": "215 Clayton St",
+    "second_line": "",
+    "city": "San Francisco",
+    "state": "CA",
+    "zip": "94117",
     "country_iso": "US",
     "created_timestamp": int(time.time()),
     "is_gift": True,
@@ -315,13 +317,26 @@ def cmd_test_order(config, args) -> int:
     # a test order that cannot possibly finish should not cost a label.
     if config.labels.enabled:
         try:
-            compute_parcel(receipt, config.labels)
+            parcel = compute_parcel(receipt, config.labels)
         except LabelError as exc:
             print(f"\nNothing printed — this order would be held:\n  {exc}",
                   file=sys.stderr)
             return 1
+        # Printed up front so the number you came for survives whatever
+        # happens next — a failed purchase shouldn't hide it.
+        print(
+            f"Declared to the carrier: {parcel['weight']} oz in a "
+            f"{parcel['length']} x {parcel['width']} x {parcel['height']} in box"
+        )
 
-    printer = get_printer(config)
+    # Mirror the configured slip format so the file is what the printer would
+    # have received, not a different rendering of it.
+    printer = (
+        FilePrinter(config.outbox, slip_zpl=config.slip_format == "zpl")
+        if args.no_print else get_printer(config)
+    )
+    if args.no_print:
+        print(f"Not printing — output goes to {config.outbox}/")
 
     # A temporary database keeps the fake order out of `status` and out of the
     # idempotency records that protect real orders.
@@ -333,18 +348,10 @@ def cmd_test_order(config, args) -> int:
         advance_order(receipt, store, printer, labeler)
 
         row = store.get(receipt["receipt_id"])
-        label = store.get_label(receipt["receipt_id"])
         print()
         for ev in store.events(receipt["receipt_id"]):
             print(f"  {ev['from_state'] or '-':>14} -> {ev['to_state']:<16}{ev['note']}")
         print()
-        if label and label["weight_oz"]:
-            # The number the carrier bills on. Worth checking against a scale:
-            # under-declaring is charged back weeks later, invisibly.
-            print(
-                f"Declared to the carrier: {label['weight_oz']} oz in a "
-                f"{label['length_in']} x {label['width_in']} x {label['height_in']} in box"
-            )
         if row["state"] == "held":
             print(f"HELD: {row['error']}", file=sys.stderr)
             return 1
@@ -604,14 +611,8 @@ def cmd_services(config, args) -> int:
     return 0
 
 
-SAMPLE_ADDRESS_TO = {
-    "name": "Shippo Test Recipient",
-    "street1": "215 Clayton St.",
-    "city": "San Francisco",
-    "state": "CA",
-    "zip": "94117",
-    "country": "US",
-}
+# Derived so the two sample paths can't drift apart again.
+SAMPLE_ADDRESS_TO = build_address_to(SAMPLE_RECEIPT)
 
 
 def cmd_test_label(config, args) -> int:
@@ -697,6 +698,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "--qty", type=int, default=1,
         help="quantity of each SKU (default 1) — checks weight scaling and box capacity",
+    )
+    p.add_argument(
+        "--no-print", action="store_true",
+        help="write the slip and label to the outbox instead of the printer",
     )
     p.set_defaults(func=cmd_test_order)
     sub.add_parser("test-notify", help="send a test ntfy notification").set_defaults(

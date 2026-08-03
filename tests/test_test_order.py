@@ -61,7 +61,10 @@ def run(config, **kw):
     if isinstance(sku, str):
         sku = [sku]
     return cli.cmd_test_order(
-        config, argparse.Namespace(sku=sku, qty=kw.get("qty", 1))
+        config,
+        argparse.Namespace(
+            sku=sku, qty=kw.get("qty", 1), no_print=kw.get("no_print", False)
+        ),
     )
 
 
@@ -126,6 +129,13 @@ def test_box_capacity_is_enforced(tmp_path, monkeypatch, capsys):
     assert run(load_config(tmp_path / "config.toml"), qty=5) == 1
     assert "max_items = 2" in capsys.readouterr().err
     assert not list(tmp_path.glob("outbox/*"))
+
+
+def test_no_print_keeps_it_off_the_printer(config, tmp_path, capsys):
+    # Iterating on weights shouldn't cost a label a time.
+    assert run(config, sku="MUG-BLUE-12OZ", no_print=True) == 0
+    assert "Not printing" in capsys.readouterr().out
+    assert (tmp_path / "outbox" / "packing-slip-999999999.zpl").exists()
 
 
 def test_the_fake_order_never_lands_in_the_real_database(config, tmp_path):

@@ -252,13 +252,18 @@ Then run three tests, substituting SKUs from *that* output — the words below
 are placeholders, not values to paste:
 
 ```bash
-.venv/bin/etsy-auto-print test-order --sku ONE-OF-YOUR-SKUS
-.venv/bin/etsy-auto-print test-order --sku ONE-OF-YOURS --sku ANOTHER-OF-YOURS
-.venv/bin/etsy-auto-print test-order --sku ONE-OF-YOUR-SKUS --qty 4
+.venv/bin/etsy-auto-print test-order --no-print --sku ONE-OF-YOUR-SKUS
+.venv/bin/etsy-auto-print test-order --no-print --sku ONE --sku ANOTHER
+.venv/bin/etsy-auto-print test-order --no-print --sku ONE-OF-YOUR-SKUS --qty 4
 ```
 
-A SKU that isn't on your list stops before anything prints, so a mistyped
-name costs a message rather than a label.
+`--no-print` writes the slip and label into `outbox/` instead of the printer,
+which is what you want while checking weights — no label media spent per
+attempt. Drop it once the numbers are right and you want to see the physical
+slip-then-label pairing.
+
+A SKU that isn't on your list stops before anything prints or is bought, so
+a mistyped name costs a message rather than a label.
 
 (With no `--sku` it uses the first product on your list, which is the fastest
 way to confirm the list loaded at all.)
