@@ -248,13 +248,17 @@ First see what you have — these are your own SKUs, not examples to copy:
 .venv/bin/etsy-auto-print products
 ```
 
-Then run each of these with SKUs from that list:
+Then run three tests, substituting SKUs from *that* output — the words below
+are placeholders, not values to paste:
 
 ```bash
-.venv/bin/etsy-auto-print test-order --sku <one-of-yours>
-.venv/bin/etsy-auto-print test-order --sku <one> --sku <another>   # mixed order
-.venv/bin/etsy-auto-print test-order --sku <one-of-yours> --qty 4  # bulk buy
+.venv/bin/etsy-auto-print test-order --sku ONE-OF-YOUR-SKUS
+.venv/bin/etsy-auto-print test-order --sku ONE-OF-YOURS --sku ANOTHER-OF-YOURS
+.venv/bin/etsy-auto-print test-order --sku ONE-OF-YOUR-SKUS --qty 4
 ```
+
+A SKU that isn't on your list stops before anything prints, so a mistyped
+name costs a message rather than a label.
 
 (With no `--sku` it uses the first product on your list, which is the fastest
 way to confirm the list loaded at all.)

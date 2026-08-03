@@ -261,8 +261,6 @@ def cmd_test_order(config, args) -> int:
     same code a live order takes — so what comes out of the printer is
     exactly what an unattended order would produce, in the same order.
     """
-    printer = get_printer(config)
-
     client = None
     if config.labels.enabled:
         client = make_client(config.labels.token, config.labels.allow_live)
@@ -311,6 +309,19 @@ def cmd_test_order(config, args) -> int:
         f"Fake order #{receipt['receipt_id']}"
         + (f": {listed}" if listed else " (no SKU — weights not exercised)")
     )
+
+    # Work out the parcel before anything reaches the printer. A real order
+    # prints its slip and then holds — you want the paperwork either way — but
+    # a test order that cannot possibly finish should not cost a label.
+    if config.labels.enabled:
+        try:
+            compute_parcel(receipt, config.labels)
+        except LabelError as exc:
+            print(f"\nNothing printed — this order would be held:\n  {exc}",
+                  file=sys.stderr)
+            return 1
+
+    printer = get_printer(config)
 
     # A temporary database keeps the fake order out of `status` and out of the
     # idempotency records that protect real orders.

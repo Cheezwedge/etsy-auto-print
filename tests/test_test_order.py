@@ -86,11 +86,19 @@ def test_specific_sku_can_be_named(config, capsys):
     assert "1 x STAND-WAL" in capsys.readouterr().out
 
 
-def test_unknown_sku_warns_and_then_holds(config, capsys):
+def test_unknown_sku_costs_no_label(config, tmp_path, capsys):
+    # A test order that cannot finish shouldn't burn a slip proving it.
     assert run(config, sku="NOT-A-REAL-SKU") == 1
     captured = capsys.readouterr()
-    assert "no weight configured" in captured.out
-    assert "HELD" in captured.err
+    assert "not in your product list" in captured.out
+    assert "Nothing printed" in captured.err and "no weight configured" in captured.err
+    assert not list(tmp_path.glob("outbox/*"))
+
+
+def test_a_workable_order_still_prints(config, tmp_path):
+    # The guard must not stop the orders that do work.
+    assert run(config, sku="MUG-BLUE-12OZ") == 0
+    assert (tmp_path / "outbox" / "packing-slip-999999999.zpl").exists()
 
 
 def test_multiple_skus_make_one_multi_item_order(config, capsys):
@@ -117,6 +125,7 @@ def test_box_capacity_is_enforced(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     assert run(load_config(tmp_path / "config.toml"), qty=5) == 1
     assert "max_items = 2" in capsys.readouterr().err
+    assert not list(tmp_path.glob("outbox/*"))
 
 
 def test_the_fake_order_never_lands_in_the_real_database(config, tmp_path):
