@@ -251,8 +251,11 @@ def cmd_products(config, args) -> int:
         dims = (f"{preset}  {box['length_in']}x{box['width_in']}x{box['height_in']} in"
                 if box else preset)
         print(f"{sku[:26]:<28}{labels.item_weights_oz[sku]:<14}{dims}")
-    print(f"\n{len(labels.item_weights_oz)} product(s). "
-          "Weights are the item alone; each box adds its own packaging_oz.")
+    print(
+        f"\n{len(labels.item_weights_oz)} product(s). Weight is per item SOLD — "
+        "for a multi-pack listing that's the whole pack, not one unit."
+        "\nThe box adds its own packaging_oz on top."
+    )
     return 0
 
 

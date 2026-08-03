@@ -166,6 +166,10 @@ packaging_oz = 3.0
 # Edit it in Excel/LibreOffice/Google Sheets, export as CSV. Needs a header
 # row with a "sku" column, plus "weight_oz" and optionally "parcel". Extra
 # columns (notes, price, ...) are ignored, so one sheet can do double duty.
+#
+# weight_oz is per item SOLD, not per unit: if the listing is a pack of four,
+# it's the weight of all four. Quantity then multiplies that — someone buying
+# 2 of a 4-pack ships 8 units' worth.
 # See items.example.csv.
 # items_csv = "items.csv"
 #
