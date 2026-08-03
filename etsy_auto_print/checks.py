@@ -169,6 +169,42 @@ def check_shippo(config: Config) -> Check:
         return Check("Shippo (labels)", FAIL, f"unreachable: {exc}"[:300])
 
 
+# Values straight out of config.example.toml. Shipping with these means real
+# parcels carry a return address that doesn't exist.
+_PLACEHOLDER_SHIP_FROM = {
+    "your shop name", "123 your street", "your city", "you@example.com",
+    "your name", "123 main st",
+}
+
+
+def check_ship_from(config: Config) -> Check:
+    """Is the return address real?
+
+    Nothing downstream can tell: carriers accept a well-formed address they
+    can find, and the example one is a findable street. It only shows up when
+    an undeliverable parcel has nowhere to come back to.
+    """
+    labels = config.labels
+    if not labels.enabled:
+        return Check("Return address", WARN, "labels are disabled")
+    left = [
+        f"{key} = {value!r}"
+        for key, value in labels.ship_from.items()
+        if str(value).strip().lower() in _PLACEHOLDER_SHIP_FROM
+    ]
+    summary = ", ".join(
+        str(labels.ship_from.get(k, "")) for k in ("name", "city", "state") if labels.ship_from.get(k)
+    )
+    if left:
+        return Check(
+            "Return address", FAIL,
+            f"still the example values: {'; '.join(left)}",
+            "Fix [labels.ship_from] before going live — undeliverable parcels "
+            "have nowhere to return to",
+        )
+    return Check("Return address", OK, summary or "set")
+
+
 def check_printer(config: Config) -> Check:
     if config.printer_backend == "file":
         return Check("Printer", WARN, f"file mode — output goes to {config.outbox}",
@@ -210,6 +246,7 @@ def run_all(config: Config) -> list[Check]:
         check_etsy(config),
         check_etsy_scopes(config),
         check_shippo(config),
+        check_ship_from(config),
         check_printer(config),
         check_notifications(config),
     ]
