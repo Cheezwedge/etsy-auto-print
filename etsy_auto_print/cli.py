@@ -576,6 +576,133 @@ def _print_rates(rates: list[dict], chosen: dict | None = None) -> None:
         )
 
 
+# A real, deliverable international address, so the international service
+# tokens can be verified too — three of Etsy's six services are international
+# and none of them appear in a domestic quote.
+SAMPLE_ADDRESS_INTL = {
+    "name": "Sample Recipient",
+    "street1": "290 Bremner Blvd",
+    "city": "Toronto",
+    "state": "ON",
+    "zip": "M5V 3L9",
+    "country": "CA",
+}
+
+
+def cmd_services(config, args) -> int:
+    """List the service tokens your Shippo account actually quotes.
+
+    Shippo's published docs are the wrong source for this: they describe the
+    catalogue, not what your account is enabled for, and tokens have been
+    retired before (usps_first and usps_parcel_select went away in 2023). The
+    rates your own account returns are the ground truth, so ask it.
+    """
+    if not config.labels.enabled:
+        print("Labels are not enabled in config.toml.", file=sys.stderr)
+        return 1
+    client = make_client(config.labels.token, config.labels.allow_live)
+    parcel = {
+        "length": config.labels.parcel["length_in"],
+        "width": config.labels.parcel["width_in"],
+        "height": config.labels.parcel["height_in"],
+        "distance_unit": "in",
+        "weight": args.weight_oz,
+        "mass_unit": "oz",
+    }
+
+    destinations = [
+        ("Domestic", build_address_to(SAMPLE_RECEIPT)),
+        ("International", SAMPLE_ADDRESS_INTL),
+    ]
+    quoted: dict[str, str] = {}          # token -> display name
+    for label, address in destinations:
+        where = f"{address['city']}, {address.get('state') or address['country']}"
+        print(f"\n{label} — {args.weight_oz} oz to {where} "
+              f"({'TEST' if client.is_test else 'LIVE'}):\n")
+        try:
+            rates = client.create_shipment(
+                config.labels.ship_from, address, parcel
+            ).get("rates", [])
+        except ShippoError as exc:
+            print(f"  no quote: {exc}"[:300])
+            continue
+        if not rates:
+            print("  no rates returned")
+            continue
+        _print_rates(rates)
+        for rate in rates:
+            level = rate.get("servicelevel", {})
+            if level.get("token"):
+                quoted[level["token"]] = level.get("name", "")
+
+    if not quoted:
+        print("\nNothing quoted — check [labels.ship_from] and your Shippo account.")
+        return 1
+
+    # The point of the exercise: is every token the shipping-service map
+    # points at something this account can actually buy?
+    print("\n[labels.service_map] targets:")
+    missing = []
+    for name, token in sorted(config.labels.service_map.items()):
+        if token in quoted:
+            print(f"  ok    {token:<44}{name}")
+        else:
+            missing.append((name, token))
+    for name, token in missing:
+        print(f"  ???   {token:<44}{name}")
+    if missing:
+        print(
+            "\n'???' means the token was not quoted for either sample above. That "
+            "\nmay just be this weight or destination — but if a buyer picks that "
+            "\nservice and it still isn't quoted, the order HOLDS rather than "
+            "\nshipping the wrong thing. Worth checking before you rely on it."
+        )
+    print(
+        "\nThe third column of each rate table is the Shippo service token: the "
+        "\nright-hand side of [labels.service_map] in config.toml."
+    )
+    return 0
+
+
+def cmd_quote(config, args) -> int:
+    """Show available rates for an order without buying anything."""
+    store = Store(config.db_path)
+    if not config.labels.enabled:
+        print("Labels are not enabled in config.toml.", file=sys.stderr)
+        return 1
+    receipt = store.get_receipt_json(args.receipt_id)
+    if receipt is None:
+        print(f"Order #{args.receipt_id} not found.", file=sys.stderr)
+        return 1
+    client = make_client(config.labels.token, config.labels.allow_live)
+    parcel = compute_parcel(receipt, config.labels)
+    shipment = client.create_shipment(
+        config.labels.ship_from, build_address_to(receipt), parcel
+    )
+    rates = shipment.get("rates", [])
+    if not rates:
+        print("No rates returned.")
+        return 1
+    service = required_service(receipt, config.labels)
+    chosen = pick_rate(rates, config.labels.allowed_providers, service)
+    print(f"Parcel: {parcel['weight']} oz  ({'TEST' if client.is_test else 'LIVE'})")
+    if service:
+        print(f"Buyer's shipping service requires: {service}")
+    _print_rates(rates, chosen)
+    return 0
+
+
+def _print_rates(rates: list[dict], chosen: dict | None = None) -> None:
+    for r in sorted(rates, key=lambda r: float(r["amount"])):
+        level = r.get("servicelevel", {})
+        mark = " <== would buy" if chosen and r["object_id"] == chosen["object_id"] else ""
+        days = f"~{r['estimated_days']}d" if r.get("estimated_days") else ""
+        print(
+            f"  {r['amount']:>7} {r['currency']}  {r['provider']:<6} "
+            f"{level.get('name', ''):<30}{level.get('token', ''):<44}{days}{mark}"
+        )
+
+
 def cmd_services(config, args) -> int:
     """List the service tokens your Shippo account actually quotes.
 
