@@ -42,6 +42,9 @@ def version_label() -> str:
     revision = _git("rev-parse", "--short", "HEAD")
     if not revision:
         return base
-    if _git("status", "--porcelain"):
+    # -uno: untracked files are output (outbox, label dumps, backups), not
+    # edits to the code. Counting them makes every install look modified,
+    # which is exactly when the marker stops meaning anything.
+    if _git("status", "--porcelain", "-uno"):
         revision += ", modified"
     return f"{base} ({revision})"
