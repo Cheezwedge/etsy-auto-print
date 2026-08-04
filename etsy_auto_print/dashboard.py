@@ -42,7 +42,7 @@ from flask import (
 )
 
 from . import checks
-from .about import version_label
+from .about import running_version, version_label
 from .config import (
     CSV_PARCEL_COLUMNS,
     CSV_SKU_COLUMNS,
@@ -137,6 +137,14 @@ border:1px solid var(--line);color:var(--sub)}
   </nav>
 </header>
 <main>
+{% if stale %}
+<div class="flash err">This page is running <b>{{ version }}</b>, but the code on
+  disk is <b>{{ stale }}</b> — you're looking at an older build. The dashboard is a
+  separate process from the poller, so restarting the service doesn't update it.
+  <div class="hint">sudo systemctl restart etsy-auto-print-dashboard</div>
+  <div class="hint">pkill -f "etsy-auto-print dashboard"   # if it isn't a service</div>
+</div>
+{% endif %}
 {% with msgs = get_flashed_messages(with_categories=true) %}
   {% for cat, m in msgs %}<div class="flash {{ cat }}">{{ m }}</div>{% endfor %}
 {% endwith %}
@@ -362,7 +370,15 @@ def create_app(config_path: Path, password: str | None = None) -> Flask:
         # Markup(): the inner template's output is already-rendered HTML, so it
         # must not be escaped again when it lands in BASE's {{ body }}.
         body = Markup(render_template_string(template, **kw))
-        return render_template_string(BASE, title=title, page=name, body=body)
+        # version_label() re-reads git on every call, so it reflects the code
+        # on disk right now; running_version() is what this process loaded at
+        # startup. A difference means you're looking at a stale build.
+        on_disk = version_label()
+        running = running_version()
+        return render_template_string(
+            BASE, title=title, page=name, body=body, version=running,
+            stale=on_disk if on_disk != running else None,
+        )
 
     def _finish(what: str):
         """After a successful save: optionally restart, then show the checklist."""

@@ -27,6 +27,23 @@ def _git(*args: str) -> str | None:
     return result.stdout.decode(errors="replace").strip() or None
 
 
+_started_with: str | None = None
+
+
+def running_version() -> str:
+    """The version this process started on.
+
+    Pinned the first time it's asked, which for the dashboard is at startup.
+    Comparing it with a fresh version_label() detects the case that keeps
+    biting: code updated on disk, long-lived process still serving the old
+    build, with a stale message as the only symptom.
+    """
+    global _started_with
+    if _started_with is None:
+        _started_with = version_label()
+    return _started_with
+
+
 def version_label() -> str:
     """e.g. "0.1.0 (9adf475)", or "0.1.0 (9adf475, modified)"."""
     try:

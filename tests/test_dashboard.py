@@ -2,6 +2,7 @@ import pytest
 
 pytest.importorskip("flask")
 
+from etsy_auto_print import about, dashboard  # noqa: E402
 from etsy_auto_print.dashboard import create_app, parse_pasted_rows  # noqa: E402
 
 CONFIG = """
@@ -290,3 +291,38 @@ def test_bad_paste_reports_and_changes_nothing(client, app_dir):
     resp = client.post("/items/import", data={"pasted": "   "}, follow_redirects=True)
     assert "Nothing pasted" in resp.get_data(as_text=True)
     assert (app_dir / "items.csv").read_text() == before
+
+
+# --- knowing which build you're looking at ---------------------------------
+
+
+def test_the_running_version_is_shown(client):
+    # Without this the page gives no way to tell an updated build from a
+    # stale process — which is how a fixed bug looks unfixed.
+    assert "etsy-auto-print 9.9.9" in client.get("/").get_data(as_text=True).replace(
+        "<span class=\"ver\">", "").replace("</span>", "")
+
+
+@pytest.fixture(autouse=True)
+def pinned_version(monkeypatch):
+    monkeypatch.setattr(dashboard, "version_label", lambda: "9.9.9")
+    monkeypatch.setattr(dashboard, "running_version", lambda: "9.9.9")
+
+
+def test_a_stale_process_says_so(client, monkeypatch):
+    # The dashboard is long-lived and separate from the poller, so a git pull
+    # plus a service restart leaves it serving old code with no symptom
+    # beyond a message that looks like an unfixed bug.
+    monkeypatch.setattr(dashboard, "version_label", lambda: "0.1.0 (newer)")
+    monkeypatch.setattr(dashboard, "running_version", lambda: "0.1.0 (older)")
+    text = client.get("/").get_data(as_text=True)
+    assert "older build" in text
+    assert "etsy-auto-print-dashboard" in text
+
+
+def test_running_version_is_pinned_once(monkeypatch):
+    calls = []
+    monkeypatch.setattr(about, "_started_with", None)
+    monkeypatch.setattr(about, "version_label", lambda: calls.append(1) or f"v{len(calls)}")
+    assert about.running_version() == "v1"
+    assert about.running_version() == "v1"   # not re-read
