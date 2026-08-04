@@ -134,3 +134,52 @@ def test_example_email_alone_is_caught():
 
 def test_disabled_labels_need_no_return_address():
     assert checks.check_ship_from(cfg_with({}, enabled=False)).state == checks.WARN
+
+
+# --- printer --------------------------------------------------------------
+
+
+class PrinterConfig:
+    printer_backend = "cups"
+    cups_queue = "label"
+    outbox = "/tmp/outbox"
+
+
+def stub_run(monkeypatch, responses):
+    def fake(cmd, timeout=10):
+        return responses[cmd[0]]
+    monkeypatch.setattr(checks, "_run", fake)
+
+
+IDLE = (0, "printer label is idle.  enabled since Mon 03 Aug 2026 09:10:29 PM PDT")
+
+
+def test_missing_lpq_does_not_look_like_a_backlog(monkeypatch):
+    # lpq ships separately from the CUPS daemon. Its absence used to render
+    # as "jobs waiting: lpq not installed", leaving Status permanently amber.
+    stub_run(monkeypatch, {"lpstat": IDLE, "lpq": (127, "lpq not installed")})
+    result = checks.check_printer(PrinterConfig())
+    assert result.state == checks.OK
+    assert "lpq" not in result.detail
+
+
+def test_empty_queue_is_ok(monkeypatch):
+    stub_run(monkeypatch, {"lpstat": IDLE, "lpq": (0, "label is ready\nno entries")})
+    assert checks.check_printer(PrinterConfig()).state == checks.OK
+
+
+def test_real_backlog_still_warns(monkeypatch):
+    stub_run(monkeypatch, {
+        "lpstat": IDLE,
+        "lpq": (0, "label is ready and printing\nRank Owner Job\n1st pi 12 label 900 bytes"),
+    })
+    result = checks.check_printer(PrinterConfig())
+    assert result.state == checks.WARN
+    assert "jobs waiting" in result.detail
+
+
+def test_disabled_queue_fails(monkeypatch):
+    stub_run(monkeypatch, {"lpstat": (0, "printer label disabled since ...")})
+    result = checks.check_printer(PrinterConfig())
+    assert result.state == checks.FAIL
+    assert "cupsenable" in result.hint

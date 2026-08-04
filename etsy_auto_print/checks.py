@@ -218,8 +218,14 @@ def check_printer(config: Config) -> Check:
     if "disabled" in lowered:
         return Check("Printer", FAIL, out.splitlines()[0][:200], f"cupsenable {queue}")
     # A queue can be enabled but the printer unplugged; surface pending jobs.
-    _, jobs = _run(["lpq", "-P", queue])
-    pending = "" if "no entries" in jobs.lower() else jobs.splitlines()[-1][:120]
+    # lpq ships separately from the CUPS daemon and isn't always installed —
+    # its absence says nothing about the queue, so it must not read as a
+    # backlog. A check that cries wolf is worse than one that stays quiet.
+    code, jobs = _run(["lpq", "-P", queue])
+    lines = [ln for ln in jobs.splitlines() if ln.strip()]
+    pending = ""
+    if code == 0 and lines and "no entries" not in jobs.lower():
+        pending = lines[-1][:120]
     detail = out.splitlines()[0][:200]
     if pending:
         return Check("Printer", WARN, f"{detail} — jobs waiting: {pending}",
