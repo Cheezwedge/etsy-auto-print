@@ -70,8 +70,9 @@ class FakeShippo:
     def create_shipment(self, address_from, address_to, parcel):
         return {"rates": RATES}
 
-    def buy_label(self, rate_object_id, file_type):
+    def buy_label(self, rate_object_id, file_type, metadata=""):
         self.buy_calls += 1
+        self.last_metadata = metadata
         if self.fail_buy:
             return {"status": "ERROR", "messages": [{"text": "carrier rejected"}]}
         return {
@@ -264,7 +265,20 @@ def test_unrecorded_attempt_blocks_repurchase(store, printer, receipt):
     row = store.get(12345)
     assert row["state"] == "held"
     assert "Shippo dashboard" in row["error"]
+    # Naming the tag is the difference between a usable instruction and
+    # "go look at a list of identical USPS charges".
+    assert "Etsy order #12345" in row["error"]
     assert client.buy_calls == 0
+
+
+def test_purchase_is_tagged_with_the_etsy_order_number(store, printer, receipt):
+    """Shippo shows a row of near-identical USPS charges otherwise, and the
+    one question worth asking of it — was THIS order already charged? — has
+    no answer."""
+    store.register(receipt)
+    client = FakeShippo()
+    advance_order(receipt, store, printer, make_labeler(store, printer, client))
+    assert client.last_metadata == "Etsy order #12345"
 
 
 def test_weight_scales_with_quantity_but_box_does_not(receipt):

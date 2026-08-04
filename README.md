@@ -104,6 +104,7 @@ etsy-auto-print services        # Shippo service tokens for [labels.service_map]
 etsy-auto-print poll            # orders now advance: slip -> label
 etsy-auto-print reprint-label 123
 etsy-auto-print retry 123       # re-run a held order after fixing the cause
+etsy-auto-print refund 123      # ask for the postage back on an unused label
 ```
 
 With the test token everything behaves like production except the labels are
@@ -148,6 +149,20 @@ ship date — which Etsy uses to give buyers faster tracking updates. All of it
 is optional: if Etsy rejects any of it, the tracking number is re-sent on its
 own rather than holding an order the buyer is waiting on.
 
+### If a label is never going to be used
+
+A buyer cancels, or the wrong label prints. Shippo stopped refunding unused
+USPS labels automatically in 2024, so the postage is gone unless you ask:
+
+```bash
+etsy-auto-print refund 123
+```
+
+Requests must land within 90 days of purchase and are rejected once the
+carrier scans the parcel, so ask early. A refunded label is rejected at the
+counter — don't ship with one. Refunds show up as a credit on your next
+Shippo invoice, not immediately.
+
 For always-on operation on a Raspberry Pi, follow the full step-by-step
 guide in [docs/RASPBERRY_PI.md](docs/RASPBERRY_PI.md).
 
@@ -160,7 +175,9 @@ guide in [docs/RASPBERRY_PI.md](docs/RASPBERRY_PI.md).
 - A purchase *attempt* is recorded before money moves. If the process crashes
   between charging Shippo and recording the result, the order is held with
   instructions to check the Shippo dashboard — never silently re-bought
-  (`clear-attempt` resumes after you've verified).
+  (`clear-attempt` resumes after you've verified). Every purchase is tagged
+  `Etsy order #<id>`, so the dashboard can actually be searched for it rather
+  than eyeballed against a column of identical USPS charges.
 - Live Shippo tokens are refused unless `allow_live = true` is set: the
   default configuration physically cannot spend money.
 - Anything that fails moves to `held` with a reason (`status` shows it) and

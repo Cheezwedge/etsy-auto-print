@@ -87,9 +87,17 @@ without opening ports).
 - **Hold, don't guess** — address fails validation, no rate returned, printer
   offline, unmapped item: mark `held`, print nothing, send a notification.
   A `retry <receipt_id>` CLI command re-runs a held order after you fix it.
-- **Refunds/cancellations** — before buying, re-check the receipt status; if
-  an order cancels after label purchase, Shippo labels can be refunded via API
-  within the carrier window (surface this as a CLI command, don't automate).
+- **Refunds/cancellations** ✅ — before buying, re-check the receipt status; if
+  an order cancels after label purchase, `refund <receipt_id>` asks Shippo for
+  the postage back. Deliberately manual: since April 2024 Shippo no longer
+  refunds unused USPS labels on its own, the request must land within 90 days,
+  and it is rejected once the carrier scans the parcel — so a refund is a
+  judgement call about a specific parcel, not something a poller should make.
+- **Traceable charges** ✅ — every purchase carries `metadata = "Etsy order
+  #<id>"`, which Shippo echoes onto the transaction and shows against the
+  charge. Without it the dashboard is a column of near-identical USPS charges,
+  and the one question a crashed purchase leaves behind ("was this order
+  already charged?") has no answer.
 
 ### Money flow
 

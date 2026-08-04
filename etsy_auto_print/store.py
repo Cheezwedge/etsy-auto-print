@@ -171,6 +171,18 @@ class Store:
     def hold(self, receipt_id: int, reason: str) -> None:
         self.transition(receipt_id, "held", reason)
 
+    def note(self, receipt_id: int, note: str) -> None:
+        """Record something that happened to an order without moving it.
+
+        A refund request is the case this exists for: it needs to show up in
+        the order's history, but it says nothing about how far the order got.
+        """
+        row = self.get(receipt_id)
+        if row is None:
+            raise KeyError(f"Receipt {receipt_id} not in store")
+        self._log_event(receipt_id, row["state"], row["state"], note)
+        self.conn.commit()
+
     # -- labels (phase 2) ---------------------------------------------------
 
     def record_label_attempt(self, receipt_id: int) -> None:

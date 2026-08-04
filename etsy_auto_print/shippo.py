@@ -77,11 +77,32 @@ class ShippoClient:
             },
         )
 
-    def buy_label(self, rate_object_id: str, file_type: str) -> dict:
+    def buy_label(
+        self, rate_object_id: str, file_type: str, metadata: str = ""
+    ) -> dict:
+        payload = {
+            "rate": rate_object_id,
+            "label_file_type": file_type,
+            "async": False,
+        }
+        if metadata:
+            # Free-text, echoed back on the transaction and shown against the
+            # charge in the Shippo dashboard. No documented length limit, so
+            # keep it short rather than find out from a 400 mid-purchase.
+            payload["metadata"] = metadata[:100]
+        return self._request("POST", "/transactions/", payload)
+
+    def create_refund(self, transaction_object_id: str) -> dict:
+        """Ask for an unused label's postage back.
+
+        Since April 2024 Shippo no longer refunds unused USPS labels
+        automatically — the request has to be made, within 90 days of
+        purchase, and it is rejected if the carrier ever scanned the parcel.
+        """
         return self._request(
             "POST",
-            "/transactions/",
-            {"rate": rate_object_id, "label_file_type": file_type, "async": False},
+            "/refunds/",
+            {"transaction": transaction_object_id, "async": False},
         )
 
     def download(self, url: str) -> bytes:

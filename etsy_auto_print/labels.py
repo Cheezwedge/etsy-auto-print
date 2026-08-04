@@ -186,6 +186,16 @@ def required_service(receipt: dict, label_config) -> str | None:
     return None
 
 
+def label_metadata(receipt_id: int) -> str:
+    """The searchable tag Shippo stores against the charge for an order.
+
+    Recoverable both ways: printed by `clear-attempt` so you know what to
+    search the Shippo dashboard for, and stored on the transaction so the
+    search finds it.
+    """
+    return f"Etsy order #{receipt_id}"
+
+
 def pick_rate(
     rates: list[dict], allowed_providers: list[str], service_token: str | None = None
 ) -> dict:
@@ -239,7 +249,8 @@ class Labeler:
         if self.store.label_attempted(rid):
             raise LabelError(
                 "a previous label purchase attempt did not record a result — "
-                "check the Shippo dashboard for a charge before retrying "
+                f"search the Shippo dashboard for {label_metadata(rid)!r} to see "
+                "whether it was charged, before retrying "
                 "(clear with: etsy-auto-print clear-attempt)"
             )
 
@@ -296,7 +307,15 @@ class Labeler:
         # Record intent *before* money moves, result immediately after.
         self.store.record_label_attempt(rid)
         try:
-            txn = self.client.buy_label(rate["object_id"], self.config.file_type)
+            # The tag is what makes a Shippo charge identifiable after the
+            # fact: without it the dashboard shows a row of near-identical
+            # USPS charges, and "was order #123 already bought?" — the exact
+            # question a crashed attempt leaves behind — is unanswerable.
+            txn = self.client.buy_label(
+                rate["object_id"],
+                self.config.file_type,
+                metadata=label_metadata(rid),
+            )
         except ShippoError as exc:
             raise LabelError(f"label purchase failed: {exc}") from exc
         if txn.get("status") != "SUCCESS":

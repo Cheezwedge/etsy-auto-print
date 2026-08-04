@@ -10,6 +10,7 @@
     etsy-auto-print test-slip         print a sample slip with fake data
     etsy-auto-print products          configured SKUs, weights and boxes
     etsy-auto-print test-order        one fake order, slip + label, end to end
+    etsy-auto-print refund ID         request postage back on an unused label
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ from .labels import (
     Labeler,
     build_address_to,
     compute_parcel,
+    label_metadata,
     pick_rate,
     required_service,
 )
@@ -532,7 +534,11 @@ def cmd_clear_attempt(config, args) -> int:
     store.clear_label_attempt(args.receipt_id)
     print(
         f"Cleared. Only do this after confirming in the Shippo dashboard that "
-        f"order #{args.receipt_id} was NOT charged."
+        f"order #{args.receipt_id} was NOT charged.\n"
+        f"Every purchase is tagged, so search the dashboard for: "
+        f"{label_metadata(args.receipt_id)}\n"
+        f"If a charge IS there, do not retry — the label exists. Print it from "
+        f"Shippo, or refund it there and then retry."
     )
     return 0
 
@@ -664,80 +670,66 @@ def cmd_services(config, args) -> int:
     return 0
 
 
-def cmd_quote(config, args) -> int:
-    """Show available rates for an order without buying anything."""
+def cmd_refund(config, args) -> int:
+    """Ask Shippo for the postage back on a label that will never be used.
+
+    Not automatic and not instant: since April 2024 Shippo stops refunding
+    unused USPS labels on its own, the request must land within 90 days of
+    purchase, and it is rejected outright once the carrier has scanned the
+    parcel. So this is a deliberate command, never something the poller does.
+    """
     store = Store(config.db_path)
     if not config.labels.enabled:
         print("Labels are not enabled in config.toml.", file=sys.stderr)
         return 1
-    receipt = store.get_receipt_json(args.receipt_id)
-    if receipt is None:
-        print(f"Order #{args.receipt_id} not found.", file=sys.stderr)
+    label = store.get_label(args.receipt_id)
+    if label is None:
+        print(f"No label purchased for order #{args.receipt_id}.", file=sys.stderr)
         return 1
-    client = make_client(config.labels.token, config.labels.allow_live)
-    parcel = compute_parcel(receipt, config.labels)
-    shipment = client.create_shipment(
-        config.labels.ship_from, build_address_to(receipt), parcel
-    )
-    rates = shipment.get("rates", [])
-    if not rates:
-        print("No rates returned.")
-        return 1
-    service = required_service(receipt, config.labels)
-    chosen = pick_rate(rates, config.labels.allowed_providers, service)
-    print(f"Parcel: {parcel['weight']} oz  ({'TEST' if client.is_test else 'LIVE'})")
-    if service:
-        print(f"Buyer's shipping service requires: {service}")
-    _print_rates(rates, chosen)
-    return 0
-
-
-def _print_rates(rates: list[dict], chosen: dict | None = None) -> None:
-    for r in sorted(rates, key=lambda r: float(r["amount"])):
-        level = r.get("servicelevel", {})
-        mark = " <== would buy" if chosen and r["object_id"] == chosen["object_id"] else ""
-        days = f"~{r['estimated_days']}d" if r.get("estimated_days") else ""
+    if not label["object_id"]:
         print(
-            f"  {r['amount']:>7} {r['currency']}  {r['provider']:<6} "
-            f"{level.get('name', ''):<30}{level.get('token', ''):<44}{days}{mark}"
+            f"Order #{args.receipt_id} has a label row with no Shippo transaction "
+            "id, so there is nothing to refund by API. Refund it from the Shippo "
+            "dashboard instead.",
+            file=sys.stderr,
         )
-
-
-def cmd_services(config, args) -> int:
-    """List the service tokens your Shippo account actually quotes.
-
-    The tokens are what [labels.service_map] maps Etsy's service names onto,
-    so this is how you check a mapping is real rather than plausible.
-    """
-    if not config.labels.enabled:
-        print("Labels are not enabled in config.toml.", file=sys.stderr)
         return 1
+
     client = make_client(config.labels.token, config.labels.allow_live)
-    parcel = {
-        "length": config.labels.parcel["length_in"],
-        "width": config.labels.parcel["width_in"],
-        "height": config.labels.parcel["height_in"],
-        "distance_unit": "in",
-        "weight": args.weight_oz,
-        "mass_unit": "oz",
-    }
-    address_to = build_address_to(SAMPLE_RECEIPT)
-    shipment = client.create_shipment(config.labels.ship_from, address_to, parcel)
-    rates = shipment.get("rates", [])
-    if not rates:
-        print("No rates returned — check [labels.ship_from] and your Shippo account.")
+    if bool(label["is_test"]) != client.is_test:
+        # Test and live objects are separate universes in Shippo: the other
+        # mode's token gets a 404 for this transaction. Say so plainly rather
+        # than let it surface as "not found".
+        bought, now = ("TEST", "LIVE") if label["is_test"] else ("LIVE", "TEST")
+        print(
+            f"Order #{args.receipt_id}'s label was bought with a {bought} token but "
+            f"labels.shippo_token is now {now}. Shippo keeps the two apart, so this "
+            "refund cannot be requested with the current token.",
+            file=sys.stderr,
+        )
         return 1
-    print(
-        f"Rates for a {args.weight_oz} oz parcel to {address_to['city']}, "
-        f"{address_to['state']} ({'TEST' if client.is_test else 'LIVE'}):\n"
-    )
-    _print_rates(rates)
-    print(
-        "\nThe third column is the Shippo service token. Use it on the right-hand"
-        "\nside of [labels.service_map] in config.toml.\n"
-        "\nNote these are domestic rates to a sample US address — international"
-        "\nservices only appear when quoting an international destination."
-    )
+    if label["is_test"]:
+        print("TEST mode: Shippo always reports success and never invoices.")
+
+    print(f"Requesting refund of {label['amount']} {label['currency']} "
+          f"({label['carrier']} {label['service']}, {label['tracking_number']})")
+    try:
+        refund = client.create_refund(label["object_id"])
+    except ShippoError as exc:
+        print(f"Refund request failed: {exc}", file=sys.stderr)
+        return 1
+
+    status = refund.get("status", "?")
+    print(f"Status: {status}")
+    print({
+        "QUEUED": "Shippo is processing the request.",
+        "PENDING": "Waiting on carrier tracking data — up to 14 days.",
+        "SUCCESS": "Accepted. It lands as a credit on your next Shippo invoice.",
+        "ERROR": "Rejected — the label was already used or scanned.",
+    }.get(status, "Check the Shippo dashboard for the outcome."))
+    if status != "ERROR":
+        print("Do not ship this parcel with that label; a refunded label is rejected.")
+    store.note(args.receipt_id, f"Shippo refund requested: {status}")
     return 0
 
 
@@ -879,6 +871,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.add_argument("receipt_id", type=int)
     p.set_defaults(func=cmd_clear_attempt)
+
+    p = sub.add_parser(
+        "refund", help="request postage back on an unused label (within 90 days)"
+    )
+    p.add_argument("receipt_id", type=int)
+    p.set_defaults(func=cmd_refund)
 
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
