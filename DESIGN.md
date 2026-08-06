@@ -81,6 +81,11 @@ without opening ports).
   + `[labels.item_parcels]`), or one box for everything (`[labels.parcel]`).
   Multi-item orders spanning presets sum weights and use the largest box by
   volume; an unmapped SKU with no `default_parcel` holds for manual review.
+  `max_items` makes the presets a ladder: an order that outgrows its box
+  steps up to the smallest one that holds it (taking that box's own
+  `packaging_oz`), and holds only when no configured box does. Never a box
+  smaller than the one outgrown, whatever its `max_items` claims — the
+  dimensions are physics, `max_items` is just the shop's word.
 - **Service mapping** — the shipping method the buyer paid for (e.g. Priority
   upgrade) maps to an allowed set of Shippo service levels; buy the cheapest
   rate within that set.

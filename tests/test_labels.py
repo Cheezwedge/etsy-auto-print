@@ -288,7 +288,7 @@ def test_weight_scales_with_quantity_but_box_does_not(receipt):
     assert (parcel["length"], parcel["width"], parcel["height"]) == (10, 7, 4)
 
 
-def test_quantity_over_box_capacity_holds(receipt):
+def test_quantity_over_capacity_holds_when_no_bigger_box_exists(receipt):
     cfg = label_config(
         parcels={
             "default": {"length_in": 10, "width_in": 7, "height_in": 4,
@@ -300,19 +300,95 @@ def test_quantity_over_box_capacity_holds(receipt):
         compute_parcel(receipt, cfg)
 
 
-def test_capacity_error_suggests_a_bigger_box_that_fits(receipt):
+def test_the_hold_says_to_add_a_bigger_box(receipt):
+    cfg = label_config(
+        parcels={"default": {"length_in": 10, "width_in": 7, "height_in": 4,
+                             "packaging_oz": 3, "max_items": 2}},
+    )
+    with pytest.raises(LabelError, match=r"no larger box is configured"):
+        compute_parcel(receipt, cfg)
+
+
+LADDER = {
+    "small": {"length_in": 8, "width_in": 4, "height_in": 1.5,
+              "packaging_oz": 0.5, "max_items": 1},
+    "medium": {"length_in": 10, "width_in": 6, "height_in": 2,
+               "packaging_oz": 1.0, "max_items": 4},
+    "jumbo": {"length_in": 20, "width_in": 16, "height_in": 12,
+              "packaging_oz": 8, "max_items": 20},
+}
+
+
+def one_sku(receipt, qty):
+    receipt["transactions"] = [{"title": "Adapters", "sku": "STAND-WAL", "quantity": qty}]
+    return receipt
+
+
+def ladder_config(**kw):
+    return label_config(
+        parcels=LADDER, item_parcels={"STAND-WAL": "small"},
+        default_parcel="small", **kw
+    )
+
+
+def test_an_order_too_big_for_its_box_steps_up_instead_of_holding(receipt):
+    # The shop owns a bigger mailer and said so; holding the order would be
+    # refusing to use a box that is sitting on the desk.
+    parcel = compute_parcel(one_sku(receipt, 3), ladder_config())
+    assert (parcel["length"], parcel["width"], parcel["height"]) == (10, 6, 2)
+
+
+def test_it_steps_up_only_as_far_as_it_has_to(receipt):
+    # Jumbo also fits 3, but shipping a 20x16x12 box would be billed on
+    # dimensional weight for no reason.
+    parcel = compute_parcel(one_sku(receipt, 3), ladder_config())
+    assert parcel["length"] != 20
+
+
+def test_the_bigger_box_brings_its_own_packaging_weight(receipt):
+    # 3 x 9.5 oz of stand + the medium mailer's 1.0, not the small one's 0.5.
+    assert compute_parcel(one_sku(receipt, 3), ladder_config())["weight"] == 29.5
+
+
+def test_an_order_that_fits_stays_in_the_small_box(receipt):
+    parcel = compute_parcel(one_sku(receipt, 1), ladder_config())
+    assert (parcel["length"], parcel["width"], parcel["height"]) == (8, 4, 1.5)
+    assert parcel["weight"] == 10.0     # 9.5 + 0.5
+
+
+def test_stepping_up_past_every_box_still_holds(receipt):
+    with pytest.raises(LabelError, match="no larger box is configured"):
+        compute_parcel(one_sku(receipt, 25), ladder_config())
+
+
+def test_a_box_with_no_max_items_can_be_stepped_up_into(receipt):
+    # No limit means no limit, including as the destination of a step up.
     cfg = label_config(
         parcels={
-            "small": {"length_in": 6, "width_in": 4, "height_in": 2,
-                      "packaging_oz": 1, "max_items": 2},
-            "jumbo": {"length_in": 20, "width_in": 16, "height_in": 12,
-                      "packaging_oz": 8, "max_items": 20},
+            "small": {"length_in": 8, "width_in": 4, "height_in": 1.5,
+                      "packaging_oz": 0.5, "max_items": 1},
+            "big": {"length_in": 12, "width_in": 9, "height_in": 3,
+                    "packaging_oz": 2},
         },
-        item_parcels={"STAND-WAL": "small", "": "small"},
-        default_parcel=None,
+        item_parcels={"STAND-WAL": "small"}, default_parcel="small",
     )
-    with pytest.raises(LabelError, match="would fit: jumbo"):
-        compute_parcel(receipt, cfg)
+    assert compute_parcel(one_sku(receipt, 6), cfg)["length"] == 12
+
+
+def test_a_smaller_box_is_never_stepped_into_however_roomy_it_claims_to_be(receipt):
+    # max_items is the shop's word; the dimensions are physics. A box that
+    # says it holds 50 but is smaller than the one we outgrew is a typo.
+    cfg = label_config(
+        parcels={
+            "small": {"length_in": 8, "width_in": 4, "height_in": 1.5,
+                      "packaging_oz": 0.5, "max_items": 1},
+            "tiny": {"length_in": 4, "width_in": 3, "height_in": 1,
+                     "packaging_oz": 0.2, "max_items": 50},
+        },
+        item_parcels={"STAND-WAL": "small"}, default_parcel="small",
+    )
+    with pytest.raises(LabelError, match="no larger box is configured"):
+        compute_parcel(one_sku(receipt, 3), cfg)
 
 
 def test_max_items_absent_means_no_capacity_limit(receipt):

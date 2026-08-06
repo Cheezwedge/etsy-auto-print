@@ -115,6 +115,22 @@ class Config:
 # label purchases when the sender address has no contact email.
 _SHIP_FROM_REQUIRED = ("name", "street1", "city", "state", "zip", "country", "email")
 _PARCEL_REQUIRED = ("length_in", "width_in", "height_in", "packaging_oz")
+_PARCEL_OPTIONAL = ("max_items", "default_item_oz")
+
+# Where a plausible-looking key actually belongs, for the error message. A
+# misplaced key is silently ignored otherwise, and a parcel setting that does
+# nothing is invisible until a label ships with the wrong weight on it.
+_PARCEL_MISPLACED = {
+    "weight_oz": "per-item weights go in the items CSV, or use default_item_oz "
+                 "here to give every item in this box the same weight",
+    "weight": "per-item weights go in the items CSV, or use default_item_oz here",
+    "oz": "per-item weights go in the items CSV, or use default_item_oz here",
+    "packaging_weight_oz": "did you mean packaging_oz?",
+    "length": "did you mean length_in?",
+    "width": "did you mean width_in?",
+    "height": "did you mean height_in?",
+    "max_item": "did you mean max_items?",
+}
 
 
 CSV_SKU_COLUMNS = ("sku", "SKU", "Sku")
@@ -236,10 +252,24 @@ def _load_labels(raw: dict, base: Path) -> LabelConfig:
                 "or [labels.parcels.<name>] (multiple box sizes)."
             )
         for name, box in parcels.items():
+            where = (
+                "[labels.parcel]"
+                if name == "default" and "parcels" not in section
+                else f"[labels.parcels.{name}]"
+            )
             missing = [k for k in _PARCEL_REQUIRED if box.get(k) is None]
             if missing:
-                where = "[labels.parcel]" if name == "default" and "parcels" not in section else f"[labels.parcels.{name}]"
                 raise ConfigError(f"{where} is missing: {', '.join(missing)}")
+            for key in box:
+                if key in _PARCEL_REQUIRED or key in _PARCEL_OPTIONAL:
+                    continue
+                hint = _PARCEL_MISPLACED.get(key)
+                raise ConfigError(
+                    f"{where} has an unrecognized setting {key!r}"
+                    + (f" — {hint}" if hint else "")
+                    + f"\nValid keys here: "
+                    f"{', '.join((*_PARCEL_REQUIRED, *_PARCEL_OPTIONAL))}"
+                )
         if default_parcel and default_parcel not in parcels:
             raise ConfigError(
                 f"labels.default_parcel = {default_parcel!r} but no such preset in "

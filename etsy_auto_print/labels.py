@@ -63,6 +63,12 @@ def _volume(box: dict) -> float:
     return box["length_in"] * box["width_in"] * box["height_in"]
 
 
+def _holds(box: dict, item_count: int) -> bool:
+    """A preset with no max_items declares no limit, so it holds anything."""
+    limit = box.get("max_items")
+    return limit is None or limit >= item_count
+
+
 def compute_parcel(receipt: dict, label_config) -> dict:
     """One box per order. Each item is mapped to a parcel preset (by SKU, or
     the shop's default/only preset); if an order mixes items that map to
@@ -70,8 +76,10 @@ def compute_parcel(receipt: dict, label_config) -> dict:
     Weight sums every item's own weight (x quantity) into that box.
 
     Box *dimensions* don't scale with quantity — five mugs don't fit in a
-    one-mug box. A preset can declare max_items; exceeding it holds the
-    order rather than shipping a label with dimensions that are a lie.
+    one-mug box. A preset can declare max_items; when an order exceeds it we
+    step up to the smallest configured box that does hold that many, and hold
+    the order only when nothing does. Never ship a label whose dimensions are
+    a lie, but don't hold an order the shop already owns a box for either.
     """
     transactions = receipt.get("transactions", [])
     presets_used: set[str] = set()
@@ -106,14 +114,23 @@ def compute_parcel(receipt: dict, label_config) -> dict:
     max_items = box.get("max_items")
     if max_items is not None and item_count > max_items:
         bigger = [
-            n for n, b in label_config.parcels.items()
-            if _volume(b) > _volume(box) and (b.get("max_items") or 0) >= item_count
+            (n, b) for n, b in label_config.parcels.items()
+            if _volume(b) > _volume(box) and _holds(b, item_count)
         ]
-        hint = f" (would fit: {', '.join(sorted(bigger))})" if bigger else ""
-        raise LabelError(
-            f"order has {item_count} items but the {chosen!r} box holds "
-            f"max_items = {max_items}{hint} — pack it manually, or raise "
-            f"max_items if they really do fit"
+        if not bigger:
+            raise LabelError(
+                f"order has {item_count} items but the {chosen!r} box holds "
+                f"max_items = {max_items}, and no larger box is configured that "
+                f"holds {item_count} — pack it manually, add a bigger "
+                f"[labels.parcels.<name>], or raise max_items if they do fit"
+            )
+        # Smallest box that actually holds the order: stepping straight to the
+        # largest would overpay on dimensional weight for a two-pack.
+        outgrown, chosen = chosen, min(bigger, key=lambda nb: _volume(nb[1]))[0]
+        box = label_config.parcels[chosen]
+        log.info(
+            "Order has %d items, more than the %r box holds (%d) — using %r",
+            item_count, outgrown, max_items, chosen,
         )
 
     total_oz = box["packaging_oz"] + item_weight_total

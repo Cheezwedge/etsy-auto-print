@@ -72,6 +72,56 @@ def test_unknown_default_parcel_errors(tmp_path):
         load_config(cfg)
 
 
+# --- settings that would otherwise do nothing at all ----------------------
+
+BOX = '[labels.parcel]\nlength_in = 8\nwidth_in = 4\nheight_in = 1.5\npackaging_oz = 0.5\n'
+
+
+def with_box(tmp_path, extra=""):
+    return write(
+        tmp_path,
+        '[labels]\nenabled = true\nshippo_token = "t"\n' + SHIP_FROM + BOX + extra,
+    )
+
+
+def test_a_per_item_weight_in_the_box_table_is_rejected(tmp_path):
+    # It reads exactly like it should work, and it is silently ignored — the
+    # label then ships declaring only the empty mailer's weight.
+    cfg = with_box(tmp_path, "weight_oz = 2.5\n")
+    with pytest.raises(ConfigError, match="weight_oz"):
+        load_config(cfg)
+
+
+def test_the_rejection_says_where_the_setting_does_belong(tmp_path):
+    cfg = with_box(tmp_path, "weight_oz = 2.5\n")
+    with pytest.raises(ConfigError, match="items CSV|default_item_oz"):
+        load_config(cfg)
+
+
+@pytest.mark.parametrize("typo", ["length = 8", "packaging_weight_oz = 1", "max_item = 2"])
+def test_near_misses_are_caught_and_named(tmp_path, typo):
+    with pytest.raises(ConfigError, match="did you mean"):
+        load_config(with_box(tmp_path, typo + "\n"))
+
+
+@pytest.mark.parametrize("setting", ["max_items = 1", "default_item_oz = 2.5"])
+def test_the_real_optional_settings_still_load(tmp_path, setting):
+    key, value = setting.split(" = ")
+    assert load_config(with_box(tmp_path, setting + "\n")).labels.parcels["default"][key]
+
+
+def test_an_unrecognized_key_names_the_table_it_is_in(tmp_path):
+    cfg = write(
+        tmp_path,
+        '[labels]\nenabled = true\nshippo_token = "t"\ndefault_parcel = "small"\n'
+        + SHIP_FROM
+        + '[labels.parcels.small]\nlength_in = 6\nwidth_in = 4\nheight_in = 2\n'
+        'packaging_oz = 1\nweight_oz = 3\n',
+    )
+    with pytest.raises(ConfigError, match=r"labels\.parcels\.small"):
+        load_config(cfg)
+
+
 def test_labels_disabled_skips_box_validation(tmp_path):
     cfg = write(tmp_path, "[labels]\nenabled = false\n")
     labels = load_config(cfg).labels

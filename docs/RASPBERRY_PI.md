@@ -284,8 +284,11 @@ Declared to the carrier: 26.5 oz in a 10.0 x 7.0 x 4.0 in box
    ships in the largest box involved, and the weight sums across items — this
    is where a wrong preset shows up.
 4. **Test a bulk quantity.** Weight scales with quantity, box dimensions do
-   not. If four don't fit in that box, set `max_items` on the preset so the
-   order holds instead of shipping a label whose dimensions are a lie.
+   not. Set `max_items` on each preset to say how many fit: an order that
+   outgrows its box steps up to the smallest configured box that holds it,
+   and holds only when nothing does. Either way a label never ships with
+   dimensions that are a lie. Test one order past the step-up point and
+   confirm the label shows the bigger box's size.
 5. **Check the slip.** The SKUs and quantities on the printed pick slip
    should match what you asked for — that's what you'll pack from.
 
