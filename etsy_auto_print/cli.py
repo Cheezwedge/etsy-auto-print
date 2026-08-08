@@ -470,6 +470,21 @@ def _redact(value, key=None):
     return value
 
 
+def _raw_dashboard_password(config_path: str | None) -> str | None:
+    """dashboard.password read without validating the rest of the file.
+
+    Used when the config doesn't load: a broken [labels] section must not
+    silently drop the password off a dashboard bound to the network.
+    """
+    import tomllib
+
+    try:
+        with open(config_path or "config.toml", "rb") as handle:
+            return tomllib.load(handle).get("dashboard", {}).get("password") or None
+    except (OSError, tomllib.TOMLDecodeError):
+        return None
+
+
 def cmd_dashboard(config, args) -> int:
     """Serve the local web dashboard."""
     try:
@@ -482,7 +497,12 @@ def cmd_dashboard(config, args) -> int:
         )
         return 1
 
-    password = args.password or config.dashboard_password
+    # config is None when the file on disk doesn't load — the case the
+    # dashboard exists to fix. The password still has to be honored, so read
+    # it straight out of the TOML rather than skipping the check.
+    password = args.password or (
+        config.dashboard_password if config else _raw_dashboard_password(args.config)
+    )
     if args.host not in ("127.0.0.1", "localhost") and not password:
         print(
             f"Refusing to serve on {args.host} without a password.\n\n"
@@ -916,7 +936,8 @@ def main(argv: list[str] | None = None) -> int:
                    help="bind address (default localhost; 0.0.0.0 needs a password)")
     p.add_argument("--port", type=int, default=8765)
     p.add_argument("--password", default=None, help="overrides dashboard.password in config")
-    p.set_defaults(func=cmd_dashboard)
+    # The dashboard is how a bad config gets fixed, so it must start with one.
+    p.set_defaults(func=cmd_dashboard, needs_config=False)
 
     p = sub.add_parser(
         "dump-receipt", help="print the raw JSON Etsy returns for recent order(s)"
@@ -942,7 +963,20 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
     try:
-        config = load_config(args.config)
+        try:
+            config = load_config(args.config)
+        except ConfigError as exc:
+            if getattr(args, "needs_config", True):
+                raise
+            # A command that repairs the config can't be gated on the config
+            # being repaired. Say what's wrong and carry on without one.
+            print(f"Config problem: {exc}\n", file=sys.stderr)
+            print(
+                "Starting anyway so you can fix it — the Config tab edits the "
+                "file directly and doesn't need it to load.\n",
+                file=sys.stderr,
+            )
+            config = None
         return args.func(config, args)
     except (ConfigError, AuthError, EtsyApiError, LabelError, ShippoError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
