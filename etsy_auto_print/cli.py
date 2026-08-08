@@ -265,11 +265,18 @@ def cmd_products(config, args) -> int:
 def _is_download_listing(listing: dict) -> bool:
     """An instant-download listing, which never needs a SKU or a label.
 
-    Etsy exposes this two ways depending on endpoint and API version, so
-    check both rather than trust one. Anything unrecognised counts as
-    physical: wrongly skipping a real listing hides a genuine problem.
+    `listing_type` is the documented v3 field ("physical", "download",
+    "both"); the others are older//alternate spellings kept because getting
+    this wrong is silent. "both" ships something, so it is not a download.
+
+    Anything unrecognised counts as physical: wrongly skipping a real
+    listing hides exactly the problem this check exists to find.
     """
-    return listing.get("is_digital") is True or listing.get("type") == "download"
+    return (
+        listing.get("listing_type") == "download"
+        or listing.get("is_digital") is True
+        or listing.get("type") == "download"
+    )
 
 
 def cmd_listings(config, args) -> int:
@@ -305,7 +312,12 @@ def cmd_listings(config, args) -> int:
             continue
         if not skus:
             problems += 1
-            print(f"  HOLD  {title}\n          no SKU set on this listing")
+            # Show what Etsy called it. If a download still lands here, this
+            # line names the field value to match on instead of guessing at
+            # the schema a second time.
+            kind = listing.get("listing_type") or listing.get("type") or "not reported"
+            print(f"  HOLD  {title}\n          no SKU set on this listing "
+                  f"(Etsy calls it: {kind})")
             continue
         for sku in skus:
             if sku in known:

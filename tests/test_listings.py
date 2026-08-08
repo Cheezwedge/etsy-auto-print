@@ -148,7 +148,8 @@ def test_blank_skus_do_not_count_as_configured(config, monkeypatch, capsys):
 
 
 def download(title):
-    return {"title": title, "skus": [], "is_digital": True}
+    """What Etsy actually returns for an instant-download listing."""
+    return {"title": title, "skus": [], "listing_type": "download"}
 
 
 def test_a_digital_listing_is_not_a_missing_sku(config, monkeypatch, capsys):
@@ -164,16 +165,36 @@ def test_a_digital_listing_is_not_a_missing_sku(config, monkeypatch, capsys):
     assert "3D Print Files" in out
 
 
-def test_the_download_flag_is_also_read_from_type(config, monkeypatch, capsys):
-    code, out = run(
-        config, [{"title": "Files", "skus": [], "type": "download"}], monkeypatch, capsys
-    )
+@pytest.mark.parametrize("shape", [
+    {"listing_type": "download"},   # the documented v3 field
+    {"is_digital": True},           # alternate spellings kept deliberately
+    {"type": "download"},
+])
+def test_every_spelling_of_download_is_recognised(config, monkeypatch, capsys, shape):
+    code, out = run(config, [{"title": "Files", "skus": [], **shape}], monkeypatch, capsys)
     assert code == 0 and "digital listing(s)" in out
+
+
+def test_a_hold_reports_what_etsy_called_the_listing(config, monkeypatch, capsys):
+    # The first attempt at this matched on a field Etsy doesn't send, and the
+    # output gave no way to tell. Now the value itself is on the line.
+    code, out = run(
+        config, [{"title": "Mystery", "skus": [], "listing_type": "physical"}],
+        monkeypatch, capsys,
+    )
+    assert code == 1
+    assert "Etsy calls it: physical" in out
+
+
+def test_a_hold_says_so_when_etsy_reports_no_type_at_all(config, monkeypatch, capsys):
+    code, out = run(config, [{"title": "Mystery", "skus": []}], monkeypatch, capsys)
+    assert "Etsy calls it: not reported" in out
 
 
 def test_a_physical_listing_is_never_excused_as_digital(config, monkeypatch, capsys):
     # "both" ships something, and an unknown value must fail loud, not quiet.
-    for shape in [{"type": "both"}, {"type": "physical"}, {"is_digital": False}, {}]:
+    for shape in [{"listing_type": "both"}, {"listing_type": "physical"},
+                  {"type": "both"}, {"is_digital": False}, {}]:
         code, out = run(config, [{"title": "Adapters", "skus": [], **shape}],
                         monkeypatch, capsys)
         assert code == 1, shape
