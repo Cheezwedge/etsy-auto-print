@@ -37,6 +37,11 @@ cp config.example.toml config.toml
 # edit config.toml: set etsy.keystring and etsy.shared_secret
 ```
 
+Every `etsy-auto-print ...` command below assumes that activated venv. In a
+fresh shell you either activate it again, or spell out the path —
+`.venv/bin/etsy-auto-print ...` — which is what the Raspberry Pi guide does
+throughout, since a service account never activates anything.
+
 ### 3. Authorize (one time)
 
 ```bash

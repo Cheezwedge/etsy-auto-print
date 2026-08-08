@@ -46,7 +46,25 @@ cd etsy-auto-print
 python3 -m venv .venv
 .venv/bin/pip install -e .
 .venv/bin/pytest        # optional sanity check
+
+# put the command on your PATH, so it works from any directory
+mkdir -p ~/.local/bin
+ln -sf ~/etsy-auto-print/.venv/bin/etsy-auto-print ~/.local/bin/
+hash -r                 # forget the shell's memory of "not found"
+etsy-auto-print --help  # should print the command list
 ```
+
+If that last line still says `command not found`, `~/.local/bin` isn't on
+your PATH — Raspberry Pi OS only adds it at login, and it didn't exist when
+you logged in. Log out and back in, or for this shell:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+The rest of this guide spells out `.venv/bin/etsy-auto-print` so it works
+whether or not you did the symlink step. With the symlink you can drop the
+`.venv/bin/` prefix everywhere.
 
 ## 4. Copy your state from the machine where you tested
 
@@ -457,6 +475,7 @@ journalctl -u etsy-auto-print -f          # live log
 
 | Symptom | Check |
 | --- | --- |
+| `etsy-auto-print: command not found` | It lives in the venv. Either run `~/etsy-auto-print/.venv/bin/etsy-auto-print`, or do the symlink step in section 3 to put the bare name on your PATH |
 | Nothing prints, no errors | `lpstat -p` — printer paused? `cupsenable label` |
 | `lp failed for queue` in log | Queue name in config matches `lpstat -p`; user in `lp`/`lpadmin` group |
 | Garbage characters printed | Raw queue + PDF file type mismatch: Zebra wants `ZPLII`, driver queues want `PDF_4x6` |
