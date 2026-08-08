@@ -142,3 +142,45 @@ def test_blank_skus_do_not_count_as_configured(config, monkeypatch, capsys):
     code, out = run(config, [listing("Assorted", "", "  ")], monkeypatch, capsys)
     assert code == 1
     assert "no SKU set" in out
+
+
+# --- digital listings ------------------------------------------------------
+
+
+def download(title):
+    return {"title": title, "skus": [], "is_digital": True}
+
+
+def test_a_digital_listing_is_not_a_missing_sku(config, monkeypatch, capsys):
+    # Nothing is packed or posted, so having no SKU is correct here. Flagging
+    # it trains you to ignore the one check whose job is catching a real one.
+    code, out = run(config, [
+        listing("Assorted set", "TPU-Assorted"),
+        download("3D Print Files"),
+    ], monkeypatch, capsys)
+    assert code == 0
+    assert "HOLD" not in out
+    assert "1 digital listing(s)" in out
+    assert "3D Print Files" in out
+
+
+def test_the_download_flag_is_also_read_from_type(config, monkeypatch, capsys):
+    code, out = run(
+        config, [{"title": "Files", "skus": [], "type": "download"}], monkeypatch, capsys
+    )
+    assert code == 0 and "digital listing(s)" in out
+
+
+def test_a_physical_listing_is_never_excused_as_digital(config, monkeypatch, capsys):
+    # "both" ships something, and an unknown value must fail loud, not quiet.
+    for shape in [{"type": "both"}, {"type": "physical"}, {"is_digital": False}, {}]:
+        code, out = run(config, [{"title": "Adapters", "skus": [], **shape}],
+                        monkeypatch, capsys)
+        assert code == 1, shape
+        assert "no SKU set" in out
+
+
+def test_a_shop_of_only_downloads_needs_no_products(config, monkeypatch, capsys):
+    code, out = run(config, [download("Files A"), download("Files B")], monkeypatch, capsys)
+    assert code == 0
+    assert "2 digital listing(s)" in out

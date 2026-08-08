@@ -262,6 +262,16 @@ def cmd_products(config, args) -> int:
     return 0
 
 
+def _is_download_listing(listing: dict) -> bool:
+    """An instant-download listing, which never needs a SKU or a label.
+
+    Etsy exposes this two ways depending on endpoint and API version, so
+    check both rather than trust one. Anything unrecognised counts as
+    physical: wrongly skipping a real listing hides a genuine problem.
+    """
+    return listing.get("is_digital") is True or listing.get("type") == "download"
+
+
 def cmd_listings(config, args) -> int:
     """Cross-check every buyable listing against the configured SKUs.
 
@@ -283,9 +293,16 @@ def cmd_listings(config, args) -> int:
     loose = {sku.strip().casefold(): sku for sku in known}
 
     problems = 0
+    digital = []
     for listing in sorted(listings, key=lambda listing: listing.get("title", "")):
         title = (listing.get("title") or "?")[:60]
         skus = [s for s in (listing.get("skus") or []) if s and s.strip()]
+        if _is_download_listing(listing):
+            # Nothing is packed or posted, so a missing SKU is correct here,
+            # not an oversight. Flagging it would train you to ignore the
+            # one check whose whole job is catching a missing SKU.
+            digital.append(title)
+            continue
         if not skus:
             problems += 1
             print(f"  HOLD  {title}\n          no SKU set on this listing")
@@ -300,6 +317,12 @@ def cmd_listings(config, args) -> int:
             else:
                 problems += 1
                 print(f"  HOLD  {title}\n          {sku!r} has no weight configured")
+
+    if digital:
+        print(f"\n{len(digital)} digital listing(s) — no label needed, skipped:")
+        for title in digital:
+            print(f"  {title}")
+        print("Orders for these complete on their own; nothing prints.")
 
     listed = {s for listing in listings for s in (listing.get("skus") or []) if s}
     if unsold := sorted(set(known) - listed):
@@ -647,15 +670,34 @@ def cmd_quote(config, args) -> int:
     return 0
 
 
+def _columns(rows: list[tuple[str, ...]], gap: str = "  ") -> list[str]:
+    """Pad columns to their own widest cell, so nothing ever runs together.
+
+    Fixed widths silently fail on the long names — a 46-character token in a
+    44-wide column butts straight against the next field, which is exactly
+    where the international service levels live.
+    """
+    widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]))] if rows else []
+    return [
+        gap.join(cell.ljust(width) for cell, width in zip(row, widths)).rstrip()
+        for row in rows
+    ]
+
+
 def _print_rates(rates: list[dict], chosen: dict | None = None) -> None:
+    rows = []
     for r in sorted(rates, key=lambda r: float(r["amount"])):
         level = r.get("servicelevel", {})
-        mark = " <== would buy" if chosen and r["object_id"] == chosen["object_id"] else ""
-        days = f"~{r['estimated_days']}d" if r.get("estimated_days") else ""
-        print(
-            f"  {r['amount']:>7} {r['currency']}  {r['provider']:<6} "
-            f"{level.get('name', ''):<30}{level.get('token', ''):<44}{days}{mark}"
-        )
+        rows.append((
+            f"{r['amount']:>7} {r['currency']}",
+            r.get("provider", ""),
+            level.get("name", ""),
+            level.get("token", ""),
+            f"~{r['estimated_days']}d" if r.get("estimated_days") else "",
+            " <== would buy" if chosen and r["object_id"] == chosen["object_id"] else "",
+        ))
+    for line in _columns(rows):
+        print(f"  {line}")
 
 
 # A real, deliverable international address, so the international service
@@ -724,14 +766,12 @@ def cmd_services(config, args) -> int:
     # The point of the exercise: is every token the shipping-service map
     # points at something this account can actually buy?
     print("\n[labels.service_map] targets:")
-    missing = []
-    for name, token in sorted(config.labels.service_map.items()):
-        if token in quoted:
-            print(f"  ok    {token:<44}{name}")
-        else:
-            missing.append((name, token))
-    for name, token in missing:
-        print(f"  ???   {token:<44}{name}")
+    mapped = sorted(config.labels.service_map.items())
+    missing = [(name, token) for name, token in mapped if token not in quoted]
+    rows = [("ok" if token in quoted else "???", token, f"<- {name}")
+            for name, token in sorted(mapped, key=lambda nt: nt[1] not in quoted)]
+    for line in _columns(rows):
+        print(f"  {line}")
     if missing:
         print(
             "\n'???' means the token was not quoted for either sample above. That "

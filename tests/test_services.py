@@ -146,3 +146,39 @@ def test_order_with_an_unknown_upgrade_is_held_before_buying(store, printer, rec
     assert row["state"] == "held"
     assert "Same Day Teleport" in row["error"]
     assert client.buy_calls == 0
+
+
+# --- readable output -------------------------------------------------------
+
+
+def test_long_service_names_and_tokens_never_run_together(capsys):
+    from etsy_auto_print.cli import _print_rates
+
+    # The international tokens are 46 characters; a fixed 44-wide column
+    # printed them flush against the next field with no space at all.
+    _print_rates([{
+        "object_id": "a", "amount": "24.69", "currency": "USD", "provider": "USPS",
+        "estimated_days": 15,
+        "servicelevel": {
+            "name": "First Class Package International Service",
+            "token": "usps_first_class_package_international_service",
+        },
+    }])
+    line = capsys.readouterr().out
+    assert "Service  usps_first_class" in line
+    assert "_service  ~15d" in line
+
+
+def test_columns_line_up_across_rows(capsys):
+    from etsy_auto_print.cli import _print_rates
+
+    _print_rates([
+        {"object_id": "a", "amount": "7.02", "currency": "USD", "provider": "USPS",
+         "servicelevel": {"name": "Ground Advantage", "token": "usps_ground_advantage"}},
+        {"object_id": "b", "amount": "64.22", "currency": "USD", "provider": "USPS",
+         "servicelevel": {"name": "Priority Mail Express International",
+                          "token": "usps_priority_mail_express_international"}},
+    ])
+    lines = [ln for ln in capsys.readouterr().out.splitlines() if ln.strip()]
+    starts = [ln.index("usps_") for ln in lines]
+    assert starts[0] == starts[1], "token column is ragged"

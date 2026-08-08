@@ -51,6 +51,24 @@ def poll_once(
     return progressed
 
 
+def is_digital_only(receipt: dict) -> bool:
+    """True when nothing on this order is physically shipped.
+
+    An instant-download listing has no SKU, no weight and no parcel, so the
+    pipeline would print a pick slip for nothing and then hold the order
+    forever on a missing weight — a false alarm on every digital sale.
+
+    A mixed order still ships: only when *every* line is digital is there
+    nothing to pack. An order with no recognisable lines is treated as
+    physical, because holding one of those is recoverable and silently
+    completing a real order is not.
+    """
+    transactions = receipt.get("transactions") or []
+    return bool(transactions) and all(
+        txn.get("is_digital") is True for txn in transactions
+    )
+
+
 def advance_order(
     receipt: dict,
     store: Store,
@@ -72,6 +90,11 @@ def advance_order(
                 f"{receipt.get('name', '?')}: {reason}\n"
                 f"Fix the cause, then run: etsy-auto-print retry {rid}",
             )
+
+    if store.get(rid)["state"] == "new" and is_digital_only(receipt):
+        store.transition(rid, "done", "digital download — nothing to ship")
+        log.info("Order #%s is a digital download; nothing to print or ship", rid)
+        return True
 
     if store.get(rid)["state"] == "new":
         try:

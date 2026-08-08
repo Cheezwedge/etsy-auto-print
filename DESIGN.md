@@ -89,6 +89,12 @@ without opening ports).
 - **Service mapping** — the shipping method the buyer paid for (e.g. Priority
   upgrade) maps to an allowed set of Shippo service levels; buy the cheapest
   rate within that set.
+- **Digital downloads** ✅ — a shop can sell instant downloads alongside
+  parcels. Those lines have no SKU, weight or parcel by nature, so an order
+  where *every* line is digital completes untouched: no slip, no label, no
+  notification. A mixed order still ships. Anything unrecognised counts as
+  physical — holding a download is an annoyance, silently completing a real
+  order loses a parcel.
 - **Hold, don't guess** — address fails validation, no rate returned, printer
   offline, unmapped item: mark `held`, print nothing, send a notification.
   A `retry <receipt_id>` CLI command re-runs a held order after you fix it.
