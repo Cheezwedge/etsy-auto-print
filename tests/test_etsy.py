@@ -73,3 +73,44 @@ def test_extract_scopes_gives_up_quietly():
     assert _extract_scopes({}) == []
     assert _extract_scopes({"count": 2}) == []
     assert _extract_scopes(None) == []
+
+
+# --- active listings ------------------------------------------------------
+
+
+def paging_client(pages):
+    """A client whose _request replays the given pages of results."""
+    c = EtsyClient(FakeConfig(), FakeTokens())
+    calls = []
+
+    def fake(method, path, **kw):
+        calls.append((path, kw.get("params", {})))
+        return pages[len(calls) - 1]
+
+    c._request = fake
+    c.calls = calls
+    return c
+
+
+def test_active_listings_stop_after_a_short_page():
+    c = paging_client([{"count": 2, "results": [{"title": "A"}, {"title": "B"}]}])
+    assert [listing["title"] for listing in c.get_active_listings()] == ["A", "B"]
+    assert len(c.calls) == 1
+    assert c.calls[0][0] == "/shops/42/listings/active"
+
+
+def test_active_listings_paginate_past_a_hundred():
+    # A full first page is indistinguishable from "there is more" without
+    # asking again — a 100-listing shop must not be silently truncated.
+    full = [{"title": f"L{i}"} for i in range(100)]
+    c = paging_client([
+        {"count": 130, "results": full},
+        {"count": 130, "results": [{"title": "L100"}]},
+    ])
+    listings = c.get_active_listings()
+    assert len(listings) == 101
+    assert c.calls[1][1]["offset"] == 100
+
+
+def test_active_listings_of_an_empty_shop_are_empty():
+    assert paging_client([{"count": 0, "results": []}]).get_active_listings() == []

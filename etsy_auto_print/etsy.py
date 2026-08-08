@@ -105,6 +105,28 @@ class EtsyClient:
     def get_receipt(self, receipt_id: int) -> dict:
         return self._request("GET", f"/shops/{self.shop_id}/receipts/{receipt_id}")
 
+    def get_active_listings(self) -> list[dict]:
+        """Every listing currently buyable, oldest first. Paginates past 100.
+
+        Used to answer the question worth asking before the first real order:
+        does every listing someone can buy carry a SKU this program has a
+        weight for? An order for a listing with no SKU holds, and finding
+        that out from a live order costs a buyer their wait.
+        """
+        listings: list[dict] = []
+        offset = 0
+        while True:
+            page = self._request(
+                "GET",
+                f"/shops/{self.shop_id}/listings/active",
+                params={"limit": 100, "offset": offset},
+            )
+            results = page.get("results", [])
+            listings.extend(results)
+            offset += len(results)
+            if len(results) < 100 or offset >= page.get("count", 0):
+                return listings
+
     def get_recent_receipts(self, limit: int = 5) -> list[dict]:
         """Most recent receipts regardless of paid/shipped state.
 

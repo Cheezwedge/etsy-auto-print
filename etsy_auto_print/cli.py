@@ -9,6 +9,7 @@
     etsy-auto-print reprint ID        re-render + re-print a slip (un-holds)
     etsy-auto-print test-slip         print a sample slip with fake data
     etsy-auto-print products          configured SKUs, weights and boxes
+    etsy-auto-print listings          check live listings against those SKUs
     etsy-auto-print test-order        one fake order, slip + label, end to end
     etsy-auto-print refund ID         request postage back on an unused label
 """
@@ -258,6 +259,61 @@ def cmd_products(config, args) -> int:
         "for a multi-pack listing that's the whole pack, not one unit."
         "\nThe box adds its own packaging_oz on top."
     )
+    return 0
+
+
+def cmd_listings(config, args) -> int:
+    """Cross-check every buyable listing against the configured SKUs.
+
+    The pre-flight for a live shop. Everything else can be tested with fake
+    orders, but nothing else answers "is what I actually listed something
+    this program can ship?" — and the way that fails is a real buyer waiting
+    while their order sits held.
+    """
+    client = _build_client(config)
+    listings = client.get_active_listings()
+    if not listings:
+        print("No active listings — nothing can be ordered yet.")
+        return 0
+
+    known = config.labels.item_weights_oz
+    # Exact match is what compute_parcel does, so exact match is what gets
+    # checked. A SKU that differs only by case or spacing is the failure
+    # most worth naming, because it looks right in both places.
+    loose = {sku.strip().casefold(): sku for sku in known}
+
+    problems = 0
+    for listing in sorted(listings, key=lambda listing: listing.get("title", "")):
+        title = (listing.get("title") or "?")[:60]
+        skus = [s for s in (listing.get("skus") or []) if s and s.strip()]
+        if not skus:
+            problems += 1
+            print(f"  HOLD  {title}\n          no SKU set on this listing")
+            continue
+        for sku in skus:
+            if sku in known:
+                print(f"  ok    {title}\n          {sku}  ({known[sku]} oz)")
+            elif near := loose.get(sku.strip().casefold()):
+                problems += 1
+                print(f"  HOLD  {title}\n          {sku!r} — you have {near!r}, "
+                      "which differs only by case or spacing")
+            else:
+                problems += 1
+                print(f"  HOLD  {title}\n          {sku!r} has no weight configured")
+
+    listed = {s for listing in listings for s in (listing.get("skus") or []) if s}
+    if unsold := sorted(set(known) - listed):
+        print(f"\nConfigured but not on any active listing: {', '.join(unsold)}")
+        print("Harmless — retired variations, or listings still in draft.")
+
+    if problems:
+        print(f"\n{problems} problem(s). Every one of these HOLDS the order "
+              "instead of shipping it.")
+        print("Fix the SKU on the Etsy listing, or add it on the dashboard's "
+              "Products tab, then re-run.")
+        return 1
+    print(f"\n{len(listings)} active listing(s), every SKU has a weight. "
+          "Safe to take an order.")
     return 0
 
 
@@ -808,6 +864,10 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser(
         "products", help="list your configured SKUs, weights and boxes"
     ).set_defaults(func=cmd_products)
+
+    sub.add_parser(
+        "listings", help="check every live Etsy listing has a SKU you can ship"
+    ).set_defaults(func=cmd_listings)
 
     p = sub.add_parser(
         "test-order",

@@ -100,6 +100,7 @@ etsy-auto-print test-order --no-print   # one fake order end to end, to files
 etsy-auto-print test-label      # buy + print a TEST label end to end
 etsy-auto-print quote 123       # show rates for a real order, buy nothing
 etsy-auto-print products        # your SKUs, weights and boxes
+etsy-auto-print listings        # do your LIVE listings use those SKUs?
 etsy-auto-print services        # Shippo service tokens for [labels.service_map]
 etsy-auto-print poll            # orders now advance: slip -> label
 etsy-auto-print reprint-label 123
@@ -129,8 +130,28 @@ etsy-auto-print test-notify   # should pop up on your phone
 
 ### 7. Going live
 
+First, with the **test** token still in place:
+
+```bash
+etsy-auto-print listings   # every live listing's SKU has a weight
+etsy-auto-print check      # every connection is green
+```
+
+`listings` is the one check fake orders can't do for you: it reads what
+buyers can actually click Buy on and cross-checks each SKU against your
+products. A listing with no SKU, or a SKU that differs from your products
+list by a single capital letter, holds the order — and you find out with a
+real buyer waiting.
+
+Then take one real order (your own, or ask a friend) while still in test
+mode. It exercises polling, the receipt, weights, rates and both printouts
+for the price of Etsy's fees, and cannot buy postage or send anyone fake
+tracking. Only after that:
+
 1. In Shippo: add a payment method, copy the **live** token.
-2. In `config.toml`: paste the live token and set `allow_live = true`.
+2. In `config.toml`: comment out the test token *before* uncommenting the
+   live one — two `shippo_token` lines is a TOML error — and set
+   `allow_live = true` in the same edit.
 3. Restart `run`. From now on labels cost real postage and each completed
    order is marked shipped on Etsy with tracking (buyer gets Etsy's normal
    shipping-notification email).
