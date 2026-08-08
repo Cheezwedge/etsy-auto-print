@@ -293,6 +293,50 @@ def test_bad_paste_reports_and_changes_nothing(client, app_dir):
     assert (app_dir / "items.csv").read_text() == before
 
 
+# --- still usable when the config on disk is broken -------------------------
+
+
+@pytest.fixture
+def broken_config_client(app_dir):
+    """A config that loads as TOML but fails validation.
+
+    The dashboard is how you fix a bad config, so every page has to survive
+    one. Each new rule added to load_config is a new way to lock the user
+    out of the tool they'd use to undo it.
+    """
+    path = app_dir / "config.toml"
+    path.write_text(
+        path.read_text().replace(
+            "[labels.parcels.small]", "[labels.parcels.small]\nweight_oz = 2.5"
+        )
+    )
+    return create_app(path).test_client()
+
+
+@pytest.mark.parametrize("route", ["/", "/orders", "/items", "/config", "/logs"])
+def test_every_page_survives_a_config_that_will_not_load(broken_config_client, route):
+    assert broken_config_client.get(route).status_code == 200
+
+
+def test_the_config_tab_still_shows_the_text_to_fix(broken_config_client):
+    # Not just a 200: the editor has to contain the offending file, or there
+    # is nothing to correct.
+    text = broken_config_client.get("/config").get_data(as_text=True)
+    assert "weight_oz = 2.5" in text
+
+
+def test_the_status_page_names_the_problem(broken_config_client):
+    text = broken_config_client.get("/").get_data(as_text=True)
+    assert "weight_oz" in text
+    assert "Config tab" in text
+
+
+def test_the_broken_config_can_be_fixed_from_the_page(broken_config_client, app_dir):
+    fixed = (app_dir / "config.toml").read_text().replace("weight_oz = 2.5", "")
+    broken_config_client.post("/config", data={"text": fixed}, follow_redirects=True)
+    assert "weight_oz" not in (app_dir / "config.toml").read_text()
+
+
 # --- knowing which build you're looking at ---------------------------------
 
 

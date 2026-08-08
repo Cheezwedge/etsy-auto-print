@@ -219,6 +219,17 @@ def _load_parcels(section: dict) -> tuple[dict, dict, str | None]:
       of the code only has to handle the multi-preset shape.
     """
     parcels_raw = section.get("parcels")
+    if parcels_raw and section.get("parcel"):
+        # Silently preferring one would be worse than refusing: the ignored
+        # table is a box the shop believes it configured, and the symptom is
+        # labels going out with another box's dimensions on them.
+        raise ConfigError(
+            "config.toml has both [labels.parcel] (one box for everything) and "
+            f"[labels.parcels.*] ({', '.join(sorted(parcels_raw))}) — they are "
+            "alternatives, and [labels.parcel] would be ignored entirely.\n"
+            "Delete [labels.parcel], or move it in as another "
+            "[labels.parcels.<name>] preset."
+        )
     if parcels_raw:
         return dict(parcels_raw), dict(section.get("item_parcels", {})), section.get("default_parcel")
     return {"default": dict(section.get("parcel", {}))}, {}, "default"

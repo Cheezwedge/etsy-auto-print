@@ -122,6 +122,22 @@ def test_an_unrecognized_key_names_the_table_it_is_in(tmp_path):
         load_config(cfg)
 
 
+def test_both_box_styles_at_once_is_refused(tmp_path):
+    # [labels.parcel] is ignored outright when presets exist, so the shop
+    # would be shipping in a box it never configured, with no symptom.
+    cfg = write(
+        tmp_path,
+        '[labels]\nenabled = true\nshippo_token = "t"\ndefault_parcel = "small"\n'
+        + SHIP_FROM
+        + '[labels.parcel]\nlength_in = 8\nwidth_in = 4\nheight_in = 1.5\n'
+        'packaging_oz = 0.5\n'
+        + '[labels.parcels.small]\nlength_in = 6\nwidth_in = 4\nheight_in = 2\n'
+        'packaging_oz = 1\n',
+    )
+    with pytest.raises(ConfigError, match="would be ignored entirely"):
+        load_config(cfg)
+
+
 def test_labels_disabled_skips_box_validation(tmp_path):
     cfg = write(tmp_path, "[labels]\nenabled = false\n")
     labels = load_config(cfg).labels
