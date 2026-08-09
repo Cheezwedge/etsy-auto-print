@@ -457,16 +457,24 @@ def create_app(config_path: Path, password: str | None = None) -> Flask:
     @app.route("/items", methods=["GET", "POST"])
     @protected
     def items():
+        # A bad parcel name in the CSV makes load_config fail, and this page
+        # is where you fix it — so it has to render without one. Everything
+        # below comes from raw TOML and the CSV itself; the loaded config is
+        # only needed for the box dropdown.
+        config = None
         try:
             config = cfg()
         except ConfigError as exc:
             flash(str(exc), "err")
-            return page(ITEMS, "Products", "items", csv_path=None, rows=[], parcel_names=[])
 
         # The CSV path lives in raw TOML (load_config folds the file's contents
         # into item_weights_oz, so the path itself isn't on the Config object).
-        with open(app.config["CONFIG_PATH"], "rb") as f:
-            toml_raw = tomllib.load(f)
+        try:
+            with open(app.config["CONFIG_PATH"], "rb") as f:
+                toml_raw = tomllib.load(f)
+        except (OSError, tomllib.TOMLDecodeError):
+            return page(ITEMS, "Products", "items", csv_path=None, rows=[],
+                        parcel_names=[])
         rel = toml_raw.get("labels", {}).get("items_csv")
         if not rel:
             return page(ITEMS, "Products", "items", csv_path=None, rows=[], parcel_names=[])
@@ -501,9 +509,19 @@ def create_app(config_path: Path, password: str | None = None) -> Flask:
             _atomic_write(csv_path, buf.getvalue())
             return _finish("products")
 
+        # Without a loaded config the box names are unknown, so offer the ones
+        # the file itself declares rather than an empty dropdown that would
+        # silently blank every row's parcel on save.
+        if config is not None:
+            parcel_names = sorted(config.labels.parcels)
+        else:
+            labels_raw = toml_raw.get("labels", {})
+            parcel_names = sorted(labels_raw.get("parcels", {}))
+            if not parcel_names and labels_raw.get("parcel"):
+                parcel_names = ["default"]
+
         return page(ITEMS, "Products", "items", csv_path=csv_path,
-                    rows=_read_items_csv(csv_path),
-                    parcel_names=sorted(config.labels.parcels))
+                    rows=_read_items_csv(csv_path), parcel_names=parcel_names)
 
     @app.route("/items/import", methods=["POST"])
     @protected

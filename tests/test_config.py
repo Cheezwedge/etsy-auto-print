@@ -212,3 +212,64 @@ def test_missing_csv_file_errors_clearly(tmp_path):
     )
     with pytest.raises(ConfigError, match="does not exist"):
         load_config(cfg)
+
+
+# --- per-SKU box names that no longer exist --------------------------------
+
+
+def two_boxes(tmp_path, csv_rows, extra=""):
+    (tmp_path / "items.csv").write_text("sku,weight_oz,parcel,notes\n" + csv_rows)
+    return write(
+        tmp_path,
+        '[labels]\nenabled = true\nshippo_token = "t"\ndefault_parcel = "single"\n'
+        'items_csv = "items.csv"\n' + extra
+        + SHIP_FROM
+        + '[labels.parcels.single]\nlength_in = 8\nwidth_in = 4\nheight_in = 1.5\n'
+        'packaging_oz = 0.5\nmax_items = 1\n'
+        + '[labels.parcels.multi]\nlength_in = 12\nwidth_in = 8.5\nheight_in = 2\n'
+        'packaging_oz = 1.0\nmax_items = 4\n',
+    )
+
+
+def test_a_csv_naming_a_renamed_box_fails_at_startup(tmp_path):
+    # Renaming a preset leaves every row pointing at a box that's gone.
+    # Discovering that one held order at a time, with a buyer waiting on
+    # each, is the worst possible moment.
+    cfg = two_boxes(tmp_path, "SKU-A,2.5,default,\n")
+    with pytest.raises(ConfigError, match="name a box that isn't configured"):
+        load_config(cfg)
+
+
+def test_the_error_names_the_rows_the_boxes_and_the_file(tmp_path):
+    cfg = two_boxes(tmp_path, "SKU-A,2.5,default,\nSKU-B,2.5,default,\n")
+    with pytest.raises(ConfigError) as caught:
+        load_config(cfg)
+    message = str(caught.value)
+    assert "SKU-A -> default" in message and "SKU-B -> default" in message
+    assert "multi, single" in message          # what you could have used
+    assert "items.csv" in message              # where to fix it
+    assert "'single'" in message               # what blank would mean
+
+
+def test_a_blank_parcel_column_falls_back_to_the_default(tmp_path):
+    labels = load_config(two_boxes(tmp_path, "SKU-A,2.5,,\n")).labels
+    assert labels.item_parcels == {}
+    assert labels.default_parcel == "single"
+
+
+def test_correct_box_names_load(tmp_path):
+    labels = load_config(two_boxes(tmp_path, "SKU-A,2.5,multi,\n")).labels
+    assert labels.item_parcels == {"SKU-A": "multi"}
+
+
+def test_a_long_list_of_bad_rows_is_truncated(tmp_path):
+    rows = "".join(f"SKU-{i},2.5,gone,\n" for i in range(14))
+    with pytest.raises(ConfigError, match=r"and 4 more"):
+        load_config(two_boxes(tmp_path, rows))
+
+
+def test_a_bad_box_name_in_toml_points_at_the_toml(tmp_path):
+    cfg = two_boxes(tmp_path, "SKU-A,2.5,,\n",
+                    extra='[labels.item_parcels]\n"SKU-A" = "nope"\n')
+    with pytest.raises(ConfigError, match="nope"):
+        load_config(cfg)

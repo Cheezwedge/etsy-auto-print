@@ -370,3 +370,54 @@ def test_running_version_is_pinned_once(monkeypatch):
     monkeypatch.setattr(about, "version_label", lambda: calls.append(1) or f"v{len(calls)}")
     assert about.running_version() == "v1"
     assert about.running_version() == "v1"   # not re-read
+
+
+# --- the Products tab when the CSV is what broke the config ----------------
+
+TWO_BOXES = CONFIG.replace(
+    '[labels.parcels.small]',
+    'default_parcel = "small"\n[labels.parcels.small]',
+)
+
+
+@pytest.fixture
+def stale_parcel_client(app_dir):
+    """A CSV row naming a box that no longer exists.
+
+    This is the lockout risk: the config fails to load *because of the CSV*,
+    and the Products tab is the page you'd fix the CSV on.
+    """
+    (app_dir / "config.toml").write_text(TWO_BOXES)
+    (app_dir / "items.csv").write_text(
+        "sku,weight_oz,parcel,notes\nMUG-1,14,default,\n"
+    )
+    return create_app(app_dir / "config.toml").test_client()
+
+
+def test_the_products_tab_still_lists_the_rows_it_has_to_fix(stale_parcel_client):
+    text = stale_parcel_client.get("/items").get_data(as_text=True)
+    assert 'value="MUG-1"' in text
+
+
+def test_it_says_what_is_wrong(stale_parcel_client):
+    text = stale_parcel_client.get("/items").get_data(as_text=True)
+    assert "not configured" in text or "isn&#39;t configured" in text
+
+
+def test_the_box_dropdown_still_offers_the_real_boxes(stale_parcel_client):
+    # An empty dropdown would blank every row's parcel on save — turning a
+    # fixable mistake into a silent data loss.
+    text = stale_parcel_client.get("/items").get_data(as_text=True)
+    assert 'value="small"' in text and 'value="medium"' in text
+
+
+def test_the_fix_can_be_saved_from_the_page(stale_parcel_client, app_dir):
+    stale_parcel_client.post(
+        "/items",
+        data={"sku": ["MUG-1"], "weight_oz": ["14"], "parcel": ["small"], "notes": [""]},
+        follow_redirects=True,
+    )
+    assert "MUG-1,14,small," in (app_dir / "items.csv").read_text()
+    # ...and the config loads again afterwards.
+    from etsy_auto_print.config import load_config
+    assert load_config(app_dir / "config.toml").labels.item_parcels == {"MUG-1": "small"}

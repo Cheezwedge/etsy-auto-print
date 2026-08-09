@@ -286,6 +286,26 @@ def _load_labels(raw: dict, base: Path) -> LabelConfig:
                 f"labels.default_parcel = {default_parcel!r} but no such preset in "
                 f"[labels.parcels] (have: {', '.join(parcels)})"
             )
+        # Per-SKU box names, checked here rather than at label time. Renaming
+        # a preset leaves every row pointing at a box that no longer exists,
+        # and finding that out one held order at a time — with a buyer
+        # waiting on each — is the worst possible moment.
+        stale = sorted({
+            (sku, name) for sku, name in item_parcels.items() if name not in parcels
+        })
+        if stale:
+            where = f"the items CSV ({section['items_csv']})" if section.get(
+                "items_csv") else "[labels.item_parcels]"
+            listed = "\n".join(f"  {sku} -> {name}" for sku, name in stale[:10])
+            more = f"\n  ...and {len(stale) - 10} more" if len(stale) > 10 else ""
+            raise ConfigError(
+                f"{len(stale)} product(s) name a box that isn't configured:\n"
+                f"{listed}{more}\n"
+                f"Configured boxes: {', '.join(sorted(parcels))}\n"
+                f"Fix the parcel column in {where} — leave it blank to use "
+                f"labels.default_parcel"
+                + (f" ({default_parcel!r})" if default_parcel else "")
+            )
 
     return LabelConfig(
         enabled=enabled,
