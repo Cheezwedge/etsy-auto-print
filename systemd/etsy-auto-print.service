@@ -1,7 +1,13 @@
-# Install (adjust paths/user to your machine):
-#   sudo cp systemd/etsy-auto-print.service /etc/systemd/system/
-#   sudo systemctl daemon-reload
-#   sudo systemctl enable --now etsy-auto-print
+# REFERENCE ONLY — don't edit this file. It hardcodes "pi" and /home/pi, so
+# editing it in place is what everyone used to do, and it leaves the working
+# tree permanently dirty and conflicts on the next `git pull`.
+#
+# Install with the script instead. It fills in your real user and paths and
+# writes straight to /etc/systemd/system, never touching the repo:
+#
+#   ./systemd/install-service.sh              # the order poller
+#   ./systemd/install-service.sh dashboard    # the web dashboard
+#   ./systemd/install-service.sh run --print  # preview, install nothing
 [Unit]
 Description=Etsy auto-print order poller
 After=network-online.target

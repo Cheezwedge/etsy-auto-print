@@ -310,9 +310,11 @@ Declared to the carrier: 26.5 oz in a 10.0 x 7.0 x 4.0 in box
 5. **Check the slip.** The SKUs and quantities on the printed pick slip
    should match what you asked for — that's what you'll pack from.
 
-To have it always running, copy the systemd unit and change `run` to
-`dashboard` in `ExecStart` (use a distinct unit name, e.g.
-`etsy-auto-print-dashboard.service`).
+To have it always running, install it as its own service:
+
+```bash
+./systemd/install-service.sh dashboard
+```
 
 **After a `git pull`, restart the dashboard too.** It is a separate
 long-lived process from the poller, so `systemctl restart etsy-auto-print`
@@ -435,16 +437,20 @@ reference:
 
 ## 8. Run as a service (starts on boot, restarts on failure)
 
-Edit `systemd/etsy-auto-print.service` — set `User=` to your username and
-fix both paths to `/home/YOURUSER/etsy-auto-print` — then:
-
 ```bash
-sudo cp systemd/etsy-auto-print.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now etsy-auto-print
+./systemd/install-service.sh
 systemctl status etsy-auto-print          # should be active (running)
 journalctl -u etsy-auto-print -f          # live log
 ```
+
+The script fills in your username and this checkout's paths, writes the unit
+to `/etc/systemd/system`, reloads systemd and enables the service. Add
+`--print` to see the unit without installing anything.
+
+It deliberately does not touch `systemd/etsy-auto-print.service`. That file is
+a reference copy hardcoded to `pi` and `/home/pi`; editing it in place — which
+this guide used to tell you to do — leaves `git status` permanently dirty and
+turns the next `git pull` into a merge conflict.
 
 ## 9. Go live
 
