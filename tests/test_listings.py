@@ -54,10 +54,12 @@ def config(tmp_path, monkeypatch):
     return load_config(tmp_path / "config.toml")
 
 
-def run(config, listings, monkeypatch, capsys):
+def run(config, listings, monkeypatch, capsys, complete=True):
     monkeypatch.setattr(
         cli, "_build_client",
-        lambda cfg: type("C", (), {"get_active_listings": lambda self: listings})(),
+        lambda cfg: type("C", (), {
+            "get_all_listings": lambda self: (listings, complete)
+        })(),
     )
     code = cli.cmd_listings(config, argparse.Namespace())
     return code, capsys.readouterr().out
@@ -205,3 +207,53 @@ def test_a_shop_of_only_downloads_needs_no_products(config, monkeypatch, capsys)
     code, out = run(config, [download("Files A"), download("Files B")], monkeypatch, capsys)
     assert code == 0
     assert "2 digital listing(s)" in out
+
+
+# --- stock ------------------------------------------------------------------
+
+
+def test_a_sold_out_listing_is_reported_not_silently_dropped(config, monkeypatch, capsys):
+    # This is the failure that prompted the feature: the listing had qty 1, a
+    # cancelled order left it at 0, and this report said "safe to take an
+    # order" because Etsy drops sold-out listings from the active endpoint.
+    code, out = run(config, [
+        {"title": "Adapters", "skus": ["TPU-Assorted"], "state": "sold_out",
+         "quantity": 0},
+    ], monkeypatch, capsys)
+    assert code == 1
+    assert "nobody can buy this" in out
+    assert "Safe to take an order" not in out
+
+
+def test_zero_quantity_counts_as_sold_out_whatever_the_state_says(config, monkeypatch, capsys):
+    code, out = run(config, [
+        {"title": "Adapters", "skus": ["TPU-Assorted"], "state": "active",
+         "quantity": 0},
+    ], monkeypatch, capsys)
+    assert code == 1 and "quantity is 0" in out
+
+
+def test_a_low_listing_still_passes_but_says_so(config, monkeypatch, capsys):
+    # Low stock is a warning, not a blocker — orders still ship.
+    code, out = run(config, [
+        {"title": "Adapters", "skus": ["TPU-Assorted"], "quantity": 2},
+    ], monkeypatch, capsys)
+    assert code == 0
+    assert "only 2 left" in out
+
+
+def test_a_healthy_listing_shows_its_quantity(config, monkeypatch, capsys):
+    code, out = run(config, [
+        {"title": "Adapters", "skus": ["TPU-Assorted"], "quantity": 25},
+    ], monkeypatch, capsys)
+    assert code == 0 and "qty 25" in out
+
+
+def test_an_incomplete_view_says_what_it_could_not_see(config, monkeypatch, capsys):
+    # Without listings_r there is no way to know a sold-out listing exists,
+    # and claiming otherwise is how the original bug felt safe.
+    code, out = run(
+        config, [{"title": "Adapters", "skus": ["TPU-Assorted"], "quantity": 9}],
+        monkeypatch, capsys, complete=False,
+    )
+    assert "listings_r" in out

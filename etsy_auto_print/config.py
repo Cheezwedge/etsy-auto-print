@@ -17,7 +17,16 @@ DEFAULT_CONFIG_NAME = "config.toml"
 # Scopes: transactions_w is not used until the label phase, but requesting it
 # now means we won't need a second consent screen later. shops_r is required
 # for the /users/me lookup used to auto-discover shop_id.
-OAUTH_SCOPES = "transactions_r transactions_w shops_r"
+REQUIRED_SCOPES = "transactions_r transactions_w shops_r"
+
+# listings_r is wanted, not required. It is the only way to see a listing that
+# has gone sold_out — Etsy drops those from the public "active" endpoint
+# entirely, so without it a sold-out listing is invisible rather than
+# reported. Everything else works without it, so a token granted before this
+# existed keeps working and stock monitoring degrades instead of failing.
+OPTIONAL_SCOPES = "listings_r"
+
+OAUTH_SCOPES = f"{REQUIRED_SCOPES} {OPTIONAL_SCOPES}"
 
 
 class ConfigError(Exception):
@@ -81,6 +90,19 @@ class LabelConfig:
 
 
 @dataclass
+class StockConfig:
+    """Watching for listings that have sold out or are about to.
+
+    A sold-out listing is silent: Etsy stops showing it, no order arrives,
+    and nothing in the order pipeline can notice — the shop is just closed
+    for that item until someone happens to look.
+    """
+    enabled: bool
+    low_threshold: int
+    interval_minutes: int
+
+
+@dataclass
 class Config:
     keystring: str
     shared_secret: str
@@ -95,6 +117,7 @@ class Config:
     db_path: Path
     tokens_path: Path
     labels: LabelConfig
+    stock: StockConfig
     ntfy_url: str | None
     pushover_user_key: str | None
     pushover_api_token: str | None
@@ -233,6 +256,23 @@ def _load_parcels(section: dict) -> tuple[dict, dict, str | None]:
     if parcels_raw:
         return dict(parcels_raw), dict(section.get("item_parcels", {})), section.get("default_parcel")
     return {"default": dict(section.get("parcel", {}))}, {}, "default"
+
+
+def _load_stock(section: dict) -> StockConfig:
+    threshold = int(section.get("low_threshold", 2))
+    if threshold < 0:
+        raise ConfigError("stock.low_threshold cannot be negative")
+    minutes = int(section.get("interval_minutes", 60))
+    if minutes < 5:
+        # Listings change on the timescale of sales, not seconds, and Etsy
+        # rate-limits. A tight loop here buys nothing and risks 429s on the
+        # endpoints the order pipeline depends on.
+        raise ConfigError("stock.interval_minutes must be at least 5")
+    return StockConfig(
+        enabled=bool(section.get("enabled", True)),
+        low_threshold=threshold,
+        interval_minutes=minutes,
+    )
 
 
 def _load_labels(raw: dict, base: Path) -> LabelConfig:
@@ -394,6 +434,7 @@ def load_config(path: str | Path | None = None) -> Config:
         db_path=base / paths.get("db", "orders.db"),
         tokens_path=base / paths.get("tokens", "tokens.json"),
         labels=_load_labels(raw, base),
+        stock=_load_stock(raw.get("stock", {})),
         ntfy_url=raw.get("notify", {}).get("ntfy_url") or None,
         pushover_user_key=raw.get("notify", {}).get("pushover_user_key") or None,
         pushover_api_token=raw.get("notify", {}).get("pushover_api_token") or None,

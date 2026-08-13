@@ -9,8 +9,10 @@ tracking number must never reach a buyer.
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime, timezone
 
+from . import stock
 from .etsy import EtsyApiError, EtsyClient
 from .labels import LabelError, Labeler
 from .notify import Notifier
@@ -30,14 +32,69 @@ CARRIER_NAMES = {
 }
 
 
+class StockWatcher:
+    """Checks listing stock on its own slower clock inside the poll loop.
+
+    Listings change on the timescale of sales, so this runs hourly by
+    default rather than every poll — the order pipeline's own Etsy calls
+    matter more than stock does, and they share a rate limit.
+    """
+
+    def __init__(self, config, store: Store, notifier: Notifier | None = None):
+        self.config = config
+        self.store = store
+        self.notifier = notifier
+        # None, not 0.0: "never checked" has to be true at any clock value,
+        # not merely because real timestamps are large.
+        self.last_check: float | None = None
+        self.disabled_reason = ""
+
+    def due(self, now: float) -> bool:
+        if not self.config.enabled or self.disabled_reason:
+            return False
+        if self.last_check is None:
+            return True
+        return now - self.last_check >= self.config.interval_minutes * 60
+
+    def check(self, client: EtsyClient, now: float | None = None) -> list[stock.Alert]:
+        self.last_check = time.time() if now is None else now
+        try:
+            listings, complete = client.get_all_listings()
+        except EtsyApiError as exc:
+            # Never let stock monitoring break order processing: this runs
+            # inside the same loop that ships parcels.
+            log.warning("Stock check skipped: %s", exc)
+            return []
+
+        alerts, current = stock.evaluate(
+            listings, complete, self.store.stock_levels(), self.config.low_threshold
+        )
+        self.store.save_stock_state(current)
+
+        for alert in alerts:
+            log.warning("Listing %s is %s: %s", alert.listing_id, alert.headline,
+                        alert.title)
+            if self.notifier:
+                detail = f"{alert.title}\n{alert.reason}."
+                if not complete:
+                    detail += ("\n\nRe-run `etsy-auto-print auth` to grant listings_r "
+                               "for exact stock numbers.")
+                self.notifier.send(f"Etsy listing {alert.headline}", detail)
+        return alerts
+
+
 def poll_once(
     client: EtsyClient,
     store: Store,
     printer: Printer,
     labeler: Labeler | None = None,
     notifier: Notifier | None = None,
+    stock_watcher: "StockWatcher | None" = None,
 ) -> int:
     """One poll pass. Returns the number of orders that made progress."""
+    if stock_watcher and stock_watcher.due(time.time()):
+        stock_watcher.check(client)
+
     receipts = client.get_open_receipts()
     log.info("Poll: %d open (paid, unshipped) receipt(s)", len(receipts))
 

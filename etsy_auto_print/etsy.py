@@ -105,6 +105,38 @@ class EtsyClient:
     def get_receipt(self, receipt_id: int) -> dict:
         return self._request("GET", f"/shops/{self.shop_id}/receipts/{receipt_id}")
 
+    def get_all_listings(self) -> tuple[list[dict], bool]:
+        """Every listing including sold-out ones, if the token allows it.
+
+        Returns (listings, complete). complete is False when we had to fall
+        back to the public active-only endpoint, which omits sold_out
+        listings entirely — the caller must then infer a sell-out from a
+        listing disappearing rather than read it off the state.
+
+        The private endpoint needs listings_r, which tokens issued before
+        stock monitoring existed don't carry. Falling back keeps a live shop
+        working instead of erroring on a scope it was never granted.
+        """
+        listings: list[dict] = []
+        offset = 0
+        while True:
+            try:
+                page = self._request(
+                    "GET",
+                    f"/shops/{self.shop_id}/listings",
+                    params={"limit": 100, "offset": offset,
+                            "state": "active,sold_out"},
+                )
+            except EtsyApiError as exc:
+                if exc.status in (401, 403) and not listings:
+                    return self.get_active_listings(), False
+                raise
+            results = page.get("results", [])
+            listings.extend(results)
+            offset += len(results)
+            if len(results) < 100 or offset >= page.get("count", 0):
+                return listings, True
+
     def get_active_listings(self) -> list[dict]:
         """Every listing currently buyable, oldest first. Paginates past 100.
 

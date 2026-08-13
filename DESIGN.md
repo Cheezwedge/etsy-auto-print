@@ -95,6 +95,15 @@ without opening ports).
   notification. A mixed order still ships. Anything unrecognised counts as
   physical — holding a download is an annoyance, silently completing a real
   order loses a parcel.
+- **Stock monitoring** ✅ — a sold-out listing is the quietest failure there
+  is: no order arrives, nothing errors, and the order pipeline has nothing to
+  hold. (A cancelled order doesn't restore quantity — Etsy decrements at
+  purchase, so a listing at 1 is sold out whether or not the order stands.)
+  The poller sweeps listings hourly and notifies on the *transition* into low
+  or out of stock, so an ongoing stockout is reported once rather than every
+  hour. Needs `listings_r`, which is an optional scope: without it, sold-out
+  listings are invisible to the API and can only be inferred from a listing
+  disappearing, so the alert says so rather than overclaiming.
 - **Hold, don't guess** — address fails validation, no rate returned, printer
   offline, unmapped item: mark `held`, print nothing, send a notification.
   A `retry <receipt_id>` CLI command re-runs a held order after you fix it.

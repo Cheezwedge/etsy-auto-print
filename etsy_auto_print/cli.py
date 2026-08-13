@@ -24,7 +24,7 @@ import time
 from pathlib import Path
 from datetime import datetime
 
-from . import checks
+from . import checks, stock
 from .about import version_label
 from .auth import AuthError, TokenStore, authorize
 from .config import Config, ConfigError, load_config
@@ -39,7 +39,7 @@ from .labels import (
     required_service,
 )
 from .notify import Notifier
-from .pipeline import advance_order, poll_once, reprint
+from .pipeline import StockWatcher, advance_order, poll_once, reprint
 from .printer import FilePrinter, get_printer
 from .shippo import ShippoError, make_client
 from .slip import render_packing_slip
@@ -106,7 +106,9 @@ def cmd_poll(config, args) -> int:
     store = Store(config.db_path)
     printer = get_printer(config)
     labeler = _build_labeler(config, store, printer)
-    n = poll_once(client, store, printer, labeler, _build_notifier(config))
+    notifier = _build_notifier(config)
+    watcher = StockWatcher(config.stock, store, notifier)
+    n = poll_once(client, store, printer, labeler, notifier, watcher)
     print(f"{n} order(s) made progress.")
     return 0
 
@@ -117,6 +119,7 @@ def cmd_run(config, args) -> int:
     printer = get_printer(config)
     labeler = _build_labeler(config, store, printer)
     notifier = _build_notifier(config)
+    watcher = StockWatcher(config.stock, store, notifier)
     notify_channels = ", ".join(
         c for c in (
             "ntfy" if config.ntfy_url else None,
@@ -132,7 +135,7 @@ def cmd_run(config, args) -> int:
     )
     while True:
         try:
-            poll_once(client, store, printer, labeler, notifier)
+            poll_once(client, store, printer, labeler, notifier, watcher)
         except (EtsyApiError, AuthError) as exc:
             # Transient API failures shouldn't kill the service; the next
             # poll retries and nothing is lost (state lives in SQLite).
@@ -288,7 +291,7 @@ def cmd_listings(config, args) -> int:
     while their order sits held.
     """
     client = _build_client(config)
-    listings = client.get_active_listings()
+    listings, complete = client.get_all_listings()
     if not listings:
         print("No active listings — nothing can be ordered yet.")
         return 0
@@ -310,6 +313,13 @@ def cmd_listings(config, args) -> int:
             # one check whose whole job is catching a missing SKU.
             digital.append(title)
             continue
+        level, why = stock.level_for(listing, config.stock.low_threshold)
+        if level == stock.OUT:
+            problems += 1
+            # A sold-out listing used to vanish from this report entirely,
+            # so it read "safe to take an order" while nobody could buy.
+            print(f"  STOCK {title}\n          nobody can buy this: {why}")
+            continue
         if not skus:
             problems += 1
             # Show what Etsy called it. If a download still lands here, this
@@ -321,7 +331,11 @@ def cmd_listings(config, args) -> int:
             continue
         for sku in skus:
             if sku in known:
-                print(f"  ok    {title}\n          {sku}  ({known[sku]} oz)")
+                note = f"  — {why}" if level == stock.LOW else ""
+                qty = listing.get("quantity")
+                stocked = f", qty {qty}" if isinstance(qty, int) else ""
+                print(f"  ok    {title}\n          {sku}  "
+                      f"({known[sku]} oz{stocked}){note}")
             elif near := loose.get(sku.strip().casefold()):
                 problems += 1
                 print(f"  HOLD  {title}\n          {sku!r} — you have {near!r}, "
@@ -341,9 +355,14 @@ def cmd_listings(config, args) -> int:
         print(f"\nConfigured but not on any active listing: {', '.join(unsold)}")
         print("Harmless — retired variations, or listings still in draft.")
 
+    if not complete:
+        print("\nOnly active listings were visible — a sold-out listing is "
+              "\ninvisible to this token. Re-run `etsy-auto-print auth` to grant "
+              "\nlistings_r and see them.")
+
     if problems:
-        print(f"\n{problems} problem(s). Every one of these HOLDS the order "
-              "instead of shipping it.")
+        print(f"\n{problems} problem(s). Each one either HOLDS the order or "
+              "stops it being placed at all.")
         print("Fix the SKU on the Etsy listing, or add it on the dashboard's "
               "Products tab, then re-run.")
         return 1

@@ -70,6 +70,13 @@ CREATE TABLE IF NOT EXISTS label_attempts (
     receipt_id INTEGER PRIMARY KEY,
     at         REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS listing_stock (
+    listing_id INTEGER PRIMARY KEY,
+    title      TEXT NOT NULL DEFAULT '',
+    quantity   INTEGER,
+    level      TEXT NOT NULL DEFAULT '',
+    updated_at REAL NOT NULL
+);
 """
 
 # Everything save_label() writes, in column order. What was actually shipped
@@ -226,6 +233,32 @@ class Store:
         return self.conn.execute(
             "SELECT * FROM labels WHERE receipt_id = ?", (receipt_id,)
         ).fetchone()
+
+    # -- listing stock ------------------------------------------------------
+
+    def stock_levels(self) -> dict[int, str]:
+        """listing_id -> the level we last alerted at, so repeats stay quiet."""
+        return {
+            row["listing_id"]: row["level"]
+            for row in self.conn.execute("SELECT listing_id, level FROM listing_stock")
+        }
+
+    def stock_state(self) -> dict[int, tuple[str, str, int | None]]:
+        return {
+            row["listing_id"]: (row["level"], row["title"], row["quantity"])
+            for row in self.conn.execute(
+                "SELECT listing_id, level, title, quantity FROM listing_stock"
+            )
+        }
+
+    def save_stock_state(self, state: dict[int, tuple[str, str, int | None]]) -> None:
+        now = time.time()
+        self.conn.executemany(
+            "INSERT OR REPLACE INTO listing_stock "
+            "(listing_id, level, title, quantity, updated_at) VALUES (?, ?, ?, ?, ?)",
+            [(lid, level, title, qty, now) for lid, (level, title, qty) in state.items()],
+        )
+        self.conn.commit()
 
     def events(self, receipt_id: int) -> list[sqlite3.Row]:
         return self.conn.execute(

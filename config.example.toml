@@ -188,6 +188,22 @@ packaging_oz = 3.0
 # "STAND-WAL" = 9.5
 
 # ---------------------------------------------------------------------------
+# Watch for listings that have sold out or are about to.
+#
+# A sold-out listing is silent: no order arrives, nothing errors, and the
+# order pipeline has nothing to notice. The shop is just shut for that item
+# until you happen to look. Note that a cancelled order does NOT restore the
+# quantity — Etsy decrements it when the order is placed, so a listing at 1
+# is sold out the moment someone buys, cancellation or not.
+#
+# Needs the listings_r scope for exact numbers; without it a sell-out can
+# only be inferred from a listing disappearing. Re-run `auth` to grant it.
+
+[stock]
+enabled = true          # sweep listings and alert on stock (default true)
+low_threshold = 2       # warn at or below this quantity (0 = only on sold out)
+interval_minutes = 60   # how often to sweep; minimum 5
+
 # Phase 3: get a push notification when an order is held and needs you.
 # Pick any hard-to-guess topic name and subscribe to it in the ntfy app
 # (https://ntfy.sh — free, no account needed) on your phone or browser.

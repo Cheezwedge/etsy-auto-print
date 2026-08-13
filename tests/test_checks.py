@@ -1,7 +1,7 @@
 import requests
 
 from etsy_auto_print import checks
-from etsy_auto_print.config import OAUTH_SCOPES
+from etsy_auto_print.config import OAUTH_SCOPES, REQUIRED_SCOPES
 
 
 class StubConfig:
@@ -183,3 +183,83 @@ def test_disabled_queue_fails(monkeypatch):
     result = checks.check_printer(PrinterConfig())
     assert result.state == checks.FAIL
     assert "cupsenable" in result.hint
+
+
+# --- listing stock --------------------------------------------------------
+
+
+class StockCfg:
+    def __init__(self, enabled=True, low_threshold=2, interval_minutes=60):
+        self.enabled = enabled
+        self.low_threshold = low_threshold
+        self.interval_minutes = interval_minutes
+
+
+def stock_config(tmp_path, state=None, enabled=True):
+    from etsy_auto_print.store import Store
+
+    db = tmp_path / "orders.db"
+    store = Store(db)
+    if state:
+        store.save_stock_state(state)
+    return type("C", (), {"db_path": db, "stock": StockCfg(enabled)})()
+
+
+def test_out_of_stock_fails_the_check(tmp_path):
+    from etsy_auto_print import stock
+
+    result = checks.check_stock(
+        stock_config(tmp_path, {1: (stock.OUT, "Adapters", 0)})
+    )
+    assert result.state == checks.FAIL
+    assert "1 listing(s) out of stock" in result.detail
+    assert "Adapters" in result.facts["out of stock"]
+
+
+def test_low_stock_only_warns(tmp_path):
+    from etsy_auto_print import stock
+
+    result = checks.check_stock(stock_config(tmp_path, {1: (stock.LOW, "Adapters", 1)}))
+    assert result.state == checks.WARN
+
+
+def test_healthy_stock_is_ok(tmp_path):
+    from etsy_auto_print import stock
+
+    result = checks.check_stock(stock_config(tmp_path, {1: (stock.OK, "Adapters", 40)}))
+    assert result.state == checks.OK
+    assert "1 listing(s) in stock" in result.detail
+
+
+def test_never_swept_says_so_rather_than_claiming_health(tmp_path):
+    result = checks.check_stock(stock_config(tmp_path))
+    assert result.state == checks.WARN
+    assert "not checked yet" in result.detail
+
+
+def test_disabled_monitoring_is_not_a_failure(tmp_path):
+    result = checks.check_stock(stock_config(tmp_path, enabled=False))
+    assert result.state == checks.WARN
+
+
+# --- optional scopes ------------------------------------------------------
+
+
+def test_a_token_without_listings_r_warns_rather_than_fails(monkeypatch):
+    # Tokens issued before stock monitoring existed lack it. Turning the
+    # whole dashboard red over an optional feature trains you to ignore red.
+    stub_scopes(monkeypatch, REQUIRED_SCOPES.split())
+    result = checks.check_etsy_scopes(StubConfig())
+    assert result.state == checks.WARN
+    assert "listings_r" in result.detail
+    assert "auth" in result.hint
+
+
+def test_a_token_with_everything_is_ok(monkeypatch):
+    stub_scopes(monkeypatch, OAUTH_SCOPES.split())
+    assert checks.check_etsy_scopes(StubConfig()).state == checks.OK
+
+
+def test_a_missing_required_scope_still_fails(monkeypatch):
+    stub_scopes(monkeypatch, ["transactions_r", "listings_r"])
+    assert checks.check_etsy_scopes(StubConfig()).state == checks.FAIL

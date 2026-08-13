@@ -15,8 +15,10 @@ from dataclasses import dataclass, field
 import requests
 
 from .auth import TokenStore
-from .config import OAUTH_SCOPES, Config
+from .config import OPTIONAL_SCOPES, REQUIRED_SCOPES, Config
+from . import stock
 from .etsy import EtsyClient, ping
+from .store import Store
 
 OK, WARN, FAIL = "ok", "warn", "fail"
 
@@ -88,7 +90,8 @@ def check_etsy_scopes(config: Config) -> Check:
     new scope silently breaks an old token. Better a red row here than a 403
     on a live order.
     """
-    required = set(OAUTH_SCOPES.split())
+    required = set(REQUIRED_SCOPES.split())
+    optional = set(OPTIONAL_SCOPES.split())
     tokens = TokenStore(config)
     if not tokens.authorized:
         # The row above already reports this as a failure; don't double-count it.
@@ -109,6 +112,16 @@ def check_etsy_scopes(config: Config) -> Check:
             "Etsy permissions", FAIL, f"token is missing: {', '.join(missing)}",
             "Delete tokens.json and re-run: etsy-auto-print auth",
             facts={"granted": " ".join(sorted(granted))},
+        )
+    # Optional scopes cost a feature, not the pipeline. A token issued before
+    # the feature existed must not turn the whole dashboard red.
+    absent = sorted(optional - granted)
+    if absent:
+        return Check(
+            "Etsy permissions", WARN,
+            f"{' '.join(sorted(granted))} (no {', '.join(absent)})",
+            "Re-run `etsy-auto-print auth` to add it — without listings_r, a "
+            "sold-out listing can only be guessed at, not read",
         )
     return Check("Etsy permissions", OK, " ".join(sorted(granted)))
 
@@ -245,6 +258,41 @@ def check_notifications(config: Config) -> Check:
     return Check("Notifications", OK, ", ".join(channels))
 
 
+def check_stock(config: Config) -> Check:
+    """Listings that have sold out or are close to it.
+
+    Reads the last stock sweep from the database rather than calling Etsy —
+    this runs on every dashboard load, and a sold-out listing does not
+    become un-sold-out in the seconds between them.
+    """
+    if not config.stock.enabled:
+        return Check("Listing stock", WARN, "stock monitoring is disabled",
+                     "Set enabled = true under [stock] to be told when a "
+                     "listing sells out")
+    try:
+        state = Store(config.db_path).stock_state()
+    except Exception as exc:
+        return Check("Listing stock", WARN, f"could not read: {exc}"[:200])
+    if not state:
+        return Check("Listing stock", WARN, "not checked yet",
+                     "The poller sweeps listings hourly; run `etsy-auto-print "
+                     "listings` to check now")
+
+    out, low = stock.summarize(state)
+    names = [title for level, title, _ in state.values() if level == stock.OUT]
+    if out:
+        return Check(
+            "Listing stock", FAIL,
+            f"{out} listing(s) out of stock" + (f", {low} low" if low else ""),
+            "Nobody can buy these. Raise the quantity on Etsy.",
+            facts={"out of stock": "; ".join(n[:40] for n in names[:3])},
+        )
+    if low:
+        return Check("Listing stock", WARN, f"{low} listing(s) low on stock",
+                     "Raise the quantity on Etsy before they sell out")
+    return Check("Listing stock", OK, f"{len(state)} listing(s) in stock")
+
+
 def run_all(config: Config) -> list[Check]:
     return [
         check_service(),
@@ -254,5 +302,6 @@ def run_all(config: Config) -> list[Check]:
         check_shippo(config),
         check_ship_from(config),
         check_printer(config),
+        check_stock(config),
         check_notifications(config),
     ]
