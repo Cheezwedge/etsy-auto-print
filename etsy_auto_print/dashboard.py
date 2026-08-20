@@ -52,7 +52,8 @@ from .config import (
     load_config,
 )
 from .notify import Notifier
-from .printer import PrintError, get_printer
+from .pdf2zpl import PdfConvertError
+from .printer import PrintError, get_printer, prepare_for_label_queue
 from .slip import render_packing_slip
 from .store import Store
 
@@ -517,9 +518,10 @@ def create_app(config_path: Path, password: str | None = None) -> Flask:
             return redirect(url_for("orders"))
 
         try:
-            printer = get_printer(cfg())
-            destination = printer.print_bytes(Path(name).stem, data, ext)
-        except (ConfigError, PrintError) as exc:
+            config = cfg()
+            data, ext = prepare_for_label_queue(data, ext, config)
+            destination = get_printer(config).print_bytes(Path(name).stem, data, ext)
+        except (ConfigError, PrintError, PdfConvertError) as exc:
             flash(f"Print failed: {exc}", "err")
             return redirect(url_for("orders"))
         flash(f"Sent {upload.filename} to {destination}", "ok")

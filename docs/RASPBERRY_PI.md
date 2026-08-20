@@ -32,7 +32,7 @@ ssh youruser@printpi.local
 
 ```bash
 sudo apt update && sudo apt full-upgrade -y
-sudo apt install -y git python3-venv cups
+sudo apt install -y git python3-venv cups poppler-utils
 sudo usermod -aG lpadmin $USER    # allow managing printers
 # log out and back in so the group change applies
 ```
@@ -481,6 +481,7 @@ turns the next `git pull` into a merge conflict.
 
 | Symptom | Check |
 | --- | --- |
+| Uploaded PDF label prints nothing | A ZPL printer is a raw queue and can't read PDF. It's converted automatically — if that fails, `sudo apt install poppler-utils` |
 | `etsy-auto-print: command not found` | It lives in the venv. Either run `~/etsy-auto-print/.venv/bin/etsy-auto-print`, or do the symlink step in section 3 to put the bare name on your PATH |
 | Nothing prints, no errors | `lpstat -p` — printer paused? `cupsenable label` |
 | `lp failed for queue` in log | Queue name in config matches `lpstat -p`; user in `lp`/`lpadmin` group |

@@ -188,9 +188,18 @@ print it on the same thermal printer:
 etsy-auto-print print-label ~/etsy-label.pdf
 ```
 
-Choose the 4x6 format in Etsy's print dialog. Some services and destinations
-require the full-page multi-part customs form instead, which a 4x6 thermal
-printer cannot produce — those go on ordinary paper.
+Or drop the file into **Print a label bought elsewhere** on the dashboard's
+Orders tab. Choose the 4x6 format in Etsy's print dialog.
+
+Etsy hands you a PDF, and a ZPL thermal printer is a raw CUPS queue that
+can't read one — it accepts the job, reports a request id, and prints
+nothing. So a PDF is rasterised to ZPL automatically whenever
+`labels.file_type` is `ZPLII`. That needs `poppler-utils` installed
+(`sudo apt install poppler-utils`).
+
+Some services and destinations require the full-page multi-part customs form
+instead, which a 4x6 thermal printer cannot produce — those go on ordinary
+paper.
 
 Once Etsy marks the order shipped, the poller notices it left the open-orders
 list, confirms it against the receipt and closes it out here automatically.

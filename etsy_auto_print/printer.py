@@ -107,6 +107,22 @@ class SplitPrinter(Printer):
         return self.slip_printer.print_text(name, text)
 
 
+def prepare_for_label_queue(data: bytes, ext: str, config: Config) -> tuple[bytes, str]:
+    """Convert an uploaded label if the label printer can't read it as-is.
+
+    A ZPL printer is a raw CUPS queue: it accepts a PDF, prints nothing, and
+    reports success — so this has to happen before the job is submitted, or
+    the failure is invisible.
+
+    Anything other than a PDF bound for a ZPL queue passes straight through.
+    """
+    if ext != "pdf" or config.labels.file_type != "ZPLII":
+        return data, ext
+    from .pdf2zpl import pdf_to_zpl
+
+    return pdf_to_zpl(data), "zpl"
+
+
 def get_printer(config: Config) -> Printer:
     slip_zpl = config.slip_format == "zpl"
     if config.printer_backend == "cups":

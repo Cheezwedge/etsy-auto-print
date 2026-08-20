@@ -41,7 +41,8 @@ from .labels import (
 )
 from .notify import Notifier
 from .pipeline import StockWatcher, advance_order, poll_once, reprint
-from .printer import FilePrinter, PrintError, get_printer
+from .pdf2zpl import PdfConvertError
+from .printer import FilePrinter, PrintError, get_printer, prepare_for_label_queue
 from .shippo import ShippoError, make_client
 from .slip import render_packing_slip
 from .store import Store
@@ -399,6 +400,13 @@ def cmd_print_label(config, args) -> int:
     data = path.read_bytes()
     if not data:
         print(f"{path} is empty.", file=sys.stderr)
+        return 1
+
+    try:
+        data, ext = prepare_for_label_queue(data, ext, config)
+    except PdfConvertError as exc:
+        print(f"Could not prepare {path.name} for the label printer: {exc}",
+              file=sys.stderr)
         return 1
 
     printer = get_printer(config)
