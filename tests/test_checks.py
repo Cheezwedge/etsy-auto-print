@@ -154,32 +154,47 @@ def stub_run(monkeypatch, responses):
 IDLE = (0, "printer label is idle.  enabled since Mon 03 Aug 2026 09:10:29 PM PDT")
 
 
-def test_missing_lpq_does_not_look_like_a_backlog(monkeypatch):
-    # lpq ships separately from the CUPS daemon. Its absence used to render
-    # as "jobs waiting: lpq not installed", leaving Status permanently amber.
-    stub_run(monkeypatch, {"lpstat": IDLE, "lpq": (127, "lpq not installed")})
-    result = checks.check_printer(PrinterConfig())
-    assert result.state == checks.OK
-    assert "lpq" not in result.detail
+def stub_lpstat(monkeypatch, status, jobs=(0, "")):
+    """lpstat is called twice: -p for the queue, -o for its jobs."""
+    def fake(cmd, timeout=10):
+        return jobs if "-o" in cmd else status
+    monkeypatch.setattr(checks, "_run", fake)
 
 
-def test_empty_queue_is_ok(monkeypatch):
-    stub_run(monkeypatch, {"lpstat": IDLE, "lpq": (0, "label is ready\nno entries")})
+def test_an_empty_queue_is_ok(monkeypatch):
+    stub_lpstat(monkeypatch, IDLE)
     assert checks.check_printer(PrinterConfig()).state == checks.OK
 
 
-def test_real_backlog_still_warns(monkeypatch):
-    stub_run(monkeypatch, {
-        "lpstat": IDLE,
-        "lpq": (0, "label is ready and printing\nRank Owner Job\n1st pi 12 label 900 bytes"),
-    })
+def test_one_job_is_normal_traffic_not_an_alarm(monkeypatch):
+    # A label mid-print is the healthy case; warning on it teaches you to
+    # ignore the row.
+    stub_lpstat(monkeypatch, IDLE, (0, "label-28  pi  1024  Wed 19 Aug 2026"))
+    result = checks.check_printer(PrinterConfig())
+    assert result.state == checks.OK
+    assert "1 job printing" in result.detail
+
+
+def test_a_backlog_warns_and_says_how_to_clear_it(monkeypatch):
+    # The real failure: a job the printer can't consume stalls at "Sending
+    # data to printer" and everything after it queues up invisibly.
+    stub_lpstat(monkeypatch, IDLE, (0, "\n".join(
+        f"label-{n}  pi  1024  Wed 19 Aug 2026" for n in range(23, 29)
+    )))
     result = checks.check_printer(PrinterConfig())
     assert result.state == checks.WARN
-    assert "jobs waiting" in result.detail
+    assert "6 jobs queued" in result.detail
+    assert "label-23" in result.detail          # the one holding things up
+    assert "cancel -a label" in result.hint
+
+
+def test_an_unreadable_job_list_does_not_invent_a_problem(monkeypatch):
+    stub_lpstat(monkeypatch, IDLE, (1, "lpstat: Bad file descriptor"))
+    assert checks.check_printer(PrinterConfig()).state == checks.OK
 
 
 def test_disabled_queue_fails(monkeypatch):
-    stub_run(monkeypatch, {"lpstat": (0, "printer label disabled since ...")})
+    stub_lpstat(monkeypatch, (0, "printer label disabled since ..."))
     result = checks.check_printer(PrinterConfig())
     assert result.state == checks.FAIL
     assert "cupsenable" in result.hint

@@ -230,19 +230,28 @@ def check_printer(config: Config) -> Check:
     lowered = out.lower()
     if "disabled" in lowered:
         return Check("Printer", FAIL, out.splitlines()[0][:200], f"cupsenable {queue}")
-    # A queue can be enabled but the printer unplugged; surface pending jobs.
-    # lpq ships separately from the CUPS daemon and isn't always installed —
-    # its absence says nothing about the queue, so it must not read as a
-    # backlog. A check that cries wolf is worse than one that stays quiet.
-    code, jobs = _run(["lpq", "-P", queue])
-    lines = [ln for ln in jobs.splitlines() if ln.strip()]
-    pending = ""
-    if code == 0 and lines and "no entries" not in jobs.lower():
-        pending = lines[-1][:120]
+    # A queue can be enabled and still be jammed: a job the printer can't
+    # consume stalls at "Sending data to printer" and everything submitted
+    # afterwards queues behind it, silently. This is read with lpstat rather
+    # than lpq because lpq ships separately from CUPS and is often absent —
+    # and when it is, the backlog was invisible here.
     detail = out.splitlines()[0][:200]
-    if pending:
-        return Check("Printer", WARN, f"{detail} — jobs waiting: {pending}",
-                     "Printer may be offline or out of labels")
+    code, jobs = _run(["lpstat", "-o", queue])
+    if code != 0:
+        return Check("Printer", OK, detail)
+    queued = [line for line in jobs.splitlines() if line.strip()]
+
+    if len(queued) > 1:
+        return Check(
+            "Printer", WARN,
+            f"{detail} — {len(queued)} jobs queued, oldest: {queued[0][:80]}",
+            f"Probably stuck. Clear it with: cancel -a {queue} "
+            "— then power-cycle the printer",
+            facts={"queued": len(queued)},
+        )
+    if queued:
+        return Check("Printer", OK, f"{detail} — 1 job printing",
+                     facts={"queued": 1})
     return Check("Printer", OK, detail)
 
 
