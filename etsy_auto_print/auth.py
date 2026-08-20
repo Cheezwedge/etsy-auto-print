@@ -16,6 +16,7 @@ import hashlib
 import http.server
 import json
 import secrets
+import sys
 import threading
 import time
 import urllib.parse
@@ -134,6 +135,33 @@ class _CallbackHandler(http.server.BaseHTTPRequestHandler):
         pass
 
 
+# Text-mode browsers webbrowser will happily return when nothing better is
+# registered. None of them can complete an OAuth consent page.
+_TEXT_BROWSERS = ("lynx", "w3m", "links", "elinks", "www-browser")
+
+
+def _graphical_browser_available() -> bool:
+    """Is there a browser that could actually show a consent page?
+
+    On a headless machine webbrowser.get() still succeeds — it just returns
+    lynx. Opening a JavaScript login form in lynx isn't a degraded
+    experience, it's a dead end, so treat it as having no browser at all.
+    """
+    import os
+    import webbrowser
+
+    if os.name == "nt" or sys.platform == "darwin":
+        return True
+    # On Linux a GUI browser needs a display to open into.
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        return False
+    try:
+        name = getattr(webbrowser.get(), "name", "") or ""
+    except webbrowser.Error:
+        return False
+    return os.path.basename(name) not in _TEXT_BROWSERS
+
+
 def authorize(config: Config, open_browser: bool = True) -> TokenStore:
     """Run the interactive PKCE consent flow and persist the tokens."""
     verifier = secrets.token_urlsafe(48)
@@ -161,7 +189,20 @@ def authorize(config: Config, open_browser: bool = True) -> TokenStore:
 
     print("Open this URL in your browser and approve access:\n")
     print(f"  {url}\n")
-    if open_browser:
+    if open_browser and not _graphical_browser_available():
+        # webbrowser falls back to lynx/w3m when no GUI browser is registered,
+        # which on a headless Pi means the consent page opens in a text
+        # browser that cannot run Etsy's JavaScript — and the terminal fills
+        # with cookie prompts instead of an approval screen.
+        print(
+            "No graphical browser on this machine, so nothing was opened —\n"
+            "open the URL above on a computer that has one. The redirect goes\n"
+            f"to {config.redirect_uri} ON THIS MACHINE, so forward that port\n"
+            "first if you are connected over SSH:\n\n"
+            f"  ssh -L {config.redirect_port}:localhost:{config.redirect_port} "
+            "<user>@<this-host>\n"
+        )
+    elif open_browser:
         import webbrowser
 
         webbrowser.open(url)
