@@ -403,11 +403,17 @@ def cmd_print_label(config, args) -> int:
         return 1
 
     try:
-        data, ext = prepare_for_label_queue(data, ext, config)
+        data, ext, note = prepare_for_label_queue(data, ext, config)
     except PdfConvertError as exc:
         print(f"Could not prepare {path.name} for the label printer: {exc}",
               file=sys.stderr)
         return 1
+
+    if note:
+        print(note)
+    else:
+        print(f"Sending as {ext.upper()} unchanged "
+              f"(labels.file_type = {config.labels.file_type!r})")
 
     printer = get_printer(config)
     for copy in range(max(1, args.copies)):

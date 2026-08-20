@@ -165,3 +165,45 @@ def test_a_real_pdf_converts_to_plausible_zpl():
     # 4x6 at 203 dpi is 1218 rows tall, give or take a rounding pixel.
     length = int(zpl.split(b"^LL")[1].split(b"\n")[0])
     assert 1200 <= length <= 1230
+
+
+# --- deciding whether to convert at all -------------------------------------
+
+
+class Labels:
+    def __init__(self, file_type):
+        self.file_type = file_type
+
+
+def config_with(file_type):
+    return type("C", (), {"labels": Labels(file_type)})()
+
+
+@pytest.mark.parametrize("spelling", ["ZPLII", "ZPL II", "zplii", "zpl", "ZPL"])
+def test_every_way_of_writing_zpl_counts(spelling):
+    # An exact-match miss here is silent: the PDF goes to a raw queue and
+    # nothing prints, with the job still reporting success.
+    from etsy_auto_print.printer import label_queue_speaks_zpl
+
+    assert label_queue_speaks_zpl(config_with(spelling)) is True
+
+
+@pytest.mark.parametrize("spelling", ["PDF_4x6", "PDF", "PNG", "", None])
+def test_rendered_formats_do_not(spelling):
+    from etsy_auto_print.printer import label_queue_speaks_zpl
+
+    assert label_queue_speaks_zpl(config_with(spelling)) is False
+
+
+def test_a_pdf_for_a_pdf_queue_passes_through_untouched():
+    from etsy_auto_print.printer import prepare_for_label_queue
+
+    data, ext, note = prepare_for_label_queue(b"%PDF-x", "pdf", config_with("PDF_4x6"))
+    assert (data, ext, note) == (b"%PDF-x", "pdf", "")
+
+
+def test_zpl_is_never_converted_twice():
+    from etsy_auto_print.printer import prepare_for_label_queue
+
+    data, ext, note = prepare_for_label_queue(b"^XA^XZ", "zpl", config_with("ZPLII"))
+    assert (data, ext, note) == (b"^XA^XZ", "zpl", "")

@@ -519,12 +519,13 @@ def create_app(config_path: Path, password: str | None = None) -> Flask:
 
         try:
             config = cfg()
-            data, ext = prepare_for_label_queue(data, ext, config)
+            data, ext, note = prepare_for_label_queue(data, ext, config)
             destination = get_printer(config).print_bytes(Path(name).stem, data, ext)
         except (ConfigError, PrintError, PdfConvertError) as exc:
             flash(f"Print failed: {exc}", "err")
             return redirect(url_for("orders"))
-        flash(f"Sent {upload.filename} to {destination}", "ok")
+        detail = f" ({note})" if note else f" (as {ext.upper()}, unchanged)"
+        flash(f"Sent {upload.filename} to {destination}{detail}", "ok")
         return redirect(url_for("orders"))
 
     @app.route("/items", methods=["GET", "POST"])

@@ -129,3 +129,39 @@ def test_upload_is_behind_the_password(app_dir):
     )
     assert resp.status_code == 302
     assert "/login" in resp.headers["Location"]
+
+
+# --- saying whether the file was converted ---------------------------------
+
+ZPL_CONFIG = CONFIG.replace(
+    '[labels]\nenabled = false',
+    '[labels]\nenabled = false\nfile_type = "ZPLII"',
+)
+
+
+def test_the_flash_says_when_nothing_was_converted(client):
+    # "Sent X to CUPS queue label" reads identically whether or not the file
+    # was made printable — and that ambiguity is what hid a PDF going to a
+    # raw ZPL queue and vanishing.
+    resp = upload(client, "label.pdf")
+    assert "unchanged" in resp.get_data(as_text=True)
+
+
+def test_the_flash_says_when_it_did_convert(app_dir, monkeypatch):
+    from etsy_auto_print import printer as printer_module
+
+    (app_dir / "config.toml").write_text(ZPL_CONFIG)
+    monkeypatch.setattr(printer_module, "pdf_to_zpl", lambda data: b"^XA^XZ",
+                        raising=False)
+    monkeypatch.setattr(
+        "etsy_auto_print.pdf2zpl.pdf_to_zpl", lambda data, **kw: b"^XA^XZ"
+    )
+    client = create_app(app_dir / "config.toml").test_client()
+    resp = upload(client, "label.pdf")
+    text = resp.get_data(as_text=True)
+    assert "converted PDF to ZPL" in text
+
+
+def test_a_zpl_upload_is_never_described_as_converted(client):
+    resp = upload(client, "label.zpl", b"^XA^XZ")
+    assert "converted" not in resp.get_data(as_text=True)

@@ -107,20 +107,36 @@ class SplitPrinter(Printer):
         return self.slip_printer.print_text(name, text)
 
 
-def prepare_for_label_queue(data: bytes, ext: str, config: Config) -> tuple[bytes, str]:
+def label_queue_speaks_zpl(config: Config) -> bool:
+    """Does the label queue expect raw ZPL rather than a rendered document?
+
+    Matched loosely on purpose: "ZPLII", "ZPL II" and "zpl" all mean the same
+    thing to a person editing the config, and an exact-match miss here fails
+    silently — a PDF goes to a raw queue and prints nothing at all.
+    """
+    return "zpl" in (config.labels.file_type or "").replace(" ", "").lower()
+
+
+def prepare_for_label_queue(
+    data: bytes, ext: str, config: Config
+) -> tuple[bytes, str, str]:
     """Convert an uploaded label if the label printer can't read it as-is.
 
     A ZPL printer is a raw CUPS queue: it accepts a PDF, prints nothing, and
     reports success — so this has to happen before the job is submitted, or
     the failure is invisible.
 
-    Anything other than a PDF bound for a ZPL queue passes straight through.
+    Returns (data, ext, note); note is empty when nothing was done, and says
+    what happened when something was, because "sent to the printer" reads
+    identically either way and that ambiguity is what hid the problem.
     """
-    if ext != "pdf" or config.labels.file_type != "ZPLII":
-        return data, ext
+    if ext != "pdf":
+        return data, ext, ""
+    if not label_queue_speaks_zpl(config):
+        return data, ext, ""
     from .pdf2zpl import pdf_to_zpl
 
-    return pdf_to_zpl(data), "zpl"
+    return pdf_to_zpl(data), "zpl", "converted PDF to ZPL for the raw label queue"
 
 
 def get_printer(config: Config) -> Printer:
