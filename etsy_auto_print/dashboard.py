@@ -23,6 +23,7 @@ import os
 import secrets
 import subprocess
 import tempfile
+import threading
 import tomllib
 from datetime import datetime
 from functools import wraps
@@ -670,6 +671,17 @@ def create_app(config_path: Path, password: str | None = None) -> Flask:
     @protected
     def action(name):
         back = request.referrer or url_for("status")
+        if name == "restart-dashboard":
+            # Redirecting is the wrong shape here: this action kills the
+            # server that would serve the redirect, so the browser lands on
+            # a connection error at the POST URL and the user has to find
+            # their way back by hand. Send a page that waits instead.
+            try:
+                _restart_dashboard(delay=1.5)
+            except Exception as exc:
+                flash(f"{name} failed: {exc}", "err")
+                return redirect(back)
+            return Response(RESTARTING, mimetype="text/html")
         try:
             output = _do_action(name, app.config["CONFIG_PATH"], request.form)
             session["output"] = output
@@ -839,7 +851,27 @@ def _validate_config_text(text: str, real_path: Path) -> None:
 DASHBOARD_UNIT = f"{SERVICE_UNIT}-dashboard"
 
 
-def _restart_dashboard() -> str:
+RESTARTING = """<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Restarting · etsy-auto-print</title>
+<meta http-equiv="refresh" content="6;url=/">
+<style>
+body{margin:0;min-height:100vh;display:flex;align-items:center;
+justify-content:center;background:#f5f4f0;color:#22242b;
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,sans-serif}
+@media (prefers-color-scheme:dark){body{background:#15171c;color:#e9e8e4}}
+.box{max-width:26rem;padding:2rem;text-align:center}
+a{color:inherit}
+</style></head><body><div class="box">
+<h1>Restarting the dashboard…</h1>
+<p>This page reloads itself in a few seconds. The version in the header
+should change once it comes back.</p>
+<p><a href="/">Reload now</a></p>
+</div></body></html>
+"""
+
+
+def _restart_dashboard(delay: float = 0.0) -> str:
     """Restart the process serving this page.
 
     The poller and the dashboard are separate long-lived processes, so a
@@ -858,9 +890,24 @@ def _restart_dashboard() -> str:
             f"with ./systemd/install-service.sh dashboard, or restart it the "
             f"way you started it (close the launcher window and reopen it)."
         )
-    code, out = checks._run(
-        ["sudo", "-n", "systemctl", "restart", "--no-block", DASHBOARD_UNIT], timeout=30
-    )
+    command = ["sudo", "-n", "systemctl", "restart", "--no-block", DASHBOARD_UNIT]
+
+    # Check sudo is actually permitted before promising a restart, otherwise
+    # the browser sits on a waiting page for a restart that never happens.
+    code, out = checks._run(["sudo", "-n", "systemctl", "is-active", DASHBOARD_UNIT])
+    if code != 0 and "password" in out.lower():
+        raise RuntimeError(
+            f"{out} — run manually: sudo systemctl restart {DASHBOARD_UNIT}"
+        )
+
+    if delay:
+        # Fire after the response has been written. --no-block alone only
+        # stops systemctl waiting; systemd can still stop this process
+        # mid-response, which is what leaves the browser on a dead page.
+        threading.Timer(delay, lambda: checks._run(command, timeout=30)).start()
+        return f"Restarting {DASHBOARD_UNIT}…"
+
+    code, out = checks._run(command, timeout=30)
     if code != 0:
         raise RuntimeError(
             f"{out or 'permission denied'} — run manually: "

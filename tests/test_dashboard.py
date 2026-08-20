@@ -476,3 +476,67 @@ def test_a_denied_sudo_says_what_to_run(monkeypatch):
     monkeypatch.setattr(dashboard.checks, "_run", fake_run)
     with pytest.raises(RuntimeError, match="sudo systemctl restart"):
         dashboard._restart_dashboard()
+
+
+# --- restarting the dashboard from inside the dashboard ---------------------
+
+
+@pytest.fixture
+def fake_restart(monkeypatch):
+    """systemctl calls captured, and the deferred restart never really fires."""
+    timers = []
+
+    class FakeTimer:
+        def __init__(self, delay, fn):
+            self.delay, self.fn = delay, fn
+            timers.append(self)
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(dashboard.threading, "Timer", FakeTimer)
+    monkeypatch.setattr(dashboard.checks, "_run", lambda cmd, timeout=10: (0, ""))
+    return timers
+
+
+def test_it_answers_with_a_waiting_page_not_a_redirect(client, fake_restart):
+    # Redirecting is wrong here: the action kills the server that would serve
+    # the redirect, so the browser lands on a connection error at the POST
+    # URL and the user has to navigate back by hand.
+    resp = client.post("/action/restart-dashboard")
+    assert resp.status_code == 200
+    text = resp.get_data(as_text=True)
+    assert "Restarting the dashboard" in text
+
+
+def test_the_waiting_page_reloads_itself(client, fake_restart):
+    text = client.post("/action/restart-dashboard").get_data(as_text=True)
+    assert 'http-equiv="refresh"' in text
+    assert 'url=/' in text
+
+
+def test_the_restart_is_deferred_until_after_the_response(client, fake_restart):
+    # Fired inline, systemd can stop this process mid-response — which is
+    # exactly what leaves the browser on a dead page.
+    client.post("/action/restart-dashboard")
+    assert len(fake_restart) == 1
+    assert fake_restart[0].delay > 0
+
+
+def test_a_refused_sudo_goes_back_to_the_page_instead_of_waiting(client, monkeypatch):
+    # A waiting page for a restart that will never happen is worse than an
+    # error, because it looks like it worked.
+    def fake_run(cmd, timeout=10):
+        if "is-active" in cmd:
+            return (1, "sudo: a password is required")
+        return (0, "")
+
+    monkeypatch.setattr(dashboard.checks, "_run", fake_run)
+    resp = client.post("/action/restart-dashboard", follow_redirects=True)
+    assert "Restarting the dashboard" not in resp.get_data(as_text=True)
+    assert "password is required" in resp.get_data(as_text=True)
+
+
+def test_other_actions_still_redirect(client, monkeypatch):
+    monkeypatch.setattr(dashboard, "_do_action", lambda *a: "done")
+    assert client.post("/action/poll").status_code == 302
