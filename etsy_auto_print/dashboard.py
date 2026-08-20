@@ -29,6 +29,7 @@ from functools import wraps
 from pathlib import Path
 
 from markupsafe import Markup
+from werkzeug.utils import secure_filename
 
 from flask import (
     Flask,
@@ -51,8 +52,14 @@ from .config import (
     load_config,
 )
 from .notify import Notifier
+from .printer import PrintError, get_printer
 from .slip import render_packing_slip
 from .store import Store
+
+# Label files only; a 4x6 label is a few hundred KB at most, so the cap is
+# generous. Without one, Flask buffers whatever it is handed.
+MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+PRINTABLE_UPLOADS = ("pdf", "png", "zpl")
 
 SERVICE_UNIT = "etsy-auto-print"
 
@@ -140,9 +147,13 @@ border:1px solid var(--line);color:var(--sub)}
 {% if stale %}
 <div class="flash err">This page is running <b>{{ version }}</b>, but the code on
   disk is <b>{{ stale }}</b> — you're looking at an older build. The dashboard is a
-  separate process from the poller, so restarting the service doesn't update it.
-  <div class="hint">sudo systemctl restart etsy-auto-print-dashboard</div>
-  <div class="hint">pkill -f "etsy-auto-print dashboard"   # if it isn't a service</div>
+  separate process from the poller, so <b>Restart poller does not fix this</b>.
+  <div class="row">
+    <form method="post" action="{{ url_for('action', name='restart-dashboard') }}">
+      <button class="primary">Restart dashboard</button>
+    </form>
+  </div>
+  <div class="hint">…or by hand: sudo systemctl restart etsy-auto-print-dashboard</div>
 </div>
 {% endif %}
 {% with msgs = get_flashed_messages(with_categories=true) %}
@@ -209,8 +220,11 @@ STATUS = """
     <form method="post" action="{{ url_for('action', name='test-slip') }}"><button>Print sample slip</button></form>
     <form method="post" action="{{ url_for('action', name='test-label') }}"><button>Print test label</button></form>
     <form method="post" action="{{ url_for('action', name='test-notify') }}"><button>Send test notification</button></form>
-    <form method="post" action="{{ url_for('action', name='restart') }}"><button>Restart service</button></form>
+    <form method="post" action="{{ url_for('action', name='restart') }}"><button>Restart poller</button></form>
+    <form method="post" action="{{ url_for('action', name='restart-dashboard') }}"><button>Restart dashboard</button></form>
   </div>
+  <p class="muted">The poller processes orders; the dashboard serves this page.
+     They are separate processes, so updating the code needs both restarted.</p>
 </div>
 
 {% if output %}<div class="card"><h2>Output</h2><pre>{{ output }}</pre></div>{% endif %}
@@ -241,6 +255,21 @@ ORDERS = """
     {% endfor %}
   </table></div>
   {% endif %}
+</div>
+
+<div class="card">
+  <h2>Print a label bought elsewhere</h2>
+  <p class="muted">
+    International orders hold here, because Etsy fills in the customs form and
+    this program can't. Buy that label on Etsy, choose the 4x6 format, then
+    drop the file in below to print it on the label printer.
+  </p>
+  <form method="post" action="{{ url_for('upload_label') }}"
+        enctype="multipart/form-data">
+    <input type="file" name="label" accept=".pdf,.png,.zpl" required>
+    <button>Print it</button>
+  </form>
+  <p class="muted">PDF, PNG or ZPL, up to {{ max_upload_mb }} MB.</p>
 </div>
 {% if output %}<div class="card"><h2>Output</h2><pre>{{ output }}</pre></div>{% endif %}
 """
@@ -362,6 +391,7 @@ def create_app(config_path: Path, password: str | None = None) -> Flask:
     app.secret_key = secrets.token_hex(16)
     app.config["CONFIG_PATH"] = Path(config_path).resolve()
     app.config["PASSWORD"] = password
+    app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
 
     def cfg():
         return load_config(app.config["CONFIG_PATH"])
@@ -452,7 +482,48 @@ def create_app(config_path: Path, password: str | None = None) -> Flask:
             rows.reverse()
         except Exception as exc:
             flash(f"Could not read orders: {exc}", "err")
-        return page(ORDERS, "Orders", "orders", rows=rows, output=session.pop("output", None))
+        return page(ORDERS, "Orders", "orders", rows=rows,
+                    max_upload_mb=MAX_UPLOAD_BYTES // (1024 * 1024),
+                    output=session.pop("output", None))
+
+    @app.route("/print-label", methods=["POST"])
+    @protected
+    def upload_label():
+        """Print a label file this program didn't buy.
+
+        The alternative is scp plus a hand-written lp command, which is a lot
+        of ceremony for something that happens on every international order.
+        """
+        upload = request.files.get("label")
+        if not upload or not upload.filename:
+            flash("No file chosen.", "err")
+            return redirect(url_for("orders"))
+
+        name = secure_filename(upload.filename)
+        ext = Path(name).suffix.lstrip(".").lower()
+        if ext not in PRINTABLE_UPLOADS:
+            flash(
+                f"Cannot print {upload.filename} — expected a "
+                f"{' / '.join(sorted(PRINTABLE_UPLOADS))} file.",
+                "err",
+            )
+            return redirect(url_for("orders"))
+
+        data = upload.read()
+        if not data:
+            # A cancelled or truncated download would otherwise reach the
+            # printer as nothing at all and look like a hardware fault.
+            flash(f"{upload.filename} is empty — did the download finish?", "err")
+            return redirect(url_for("orders"))
+
+        try:
+            printer = get_printer(cfg())
+            destination = printer.print_bytes(Path(name).stem, data, ext)
+        except (ConfigError, PrintError) as exc:
+            flash(f"Print failed: {exc}", "err")
+            return redirect(url_for("orders"))
+        flash(f"Sent {upload.filename} to {destination}", "ok")
+        return redirect(url_for("orders"))
 
     @app.route("/items", methods=["GET", "POST"])
     @protected
@@ -762,6 +833,42 @@ def _validate_config_text(text: str, real_path: Path) -> None:
         Path(tmp).unlink(missing_ok=True)
 
 
+DASHBOARD_UNIT = f"{SERVICE_UNIT}-dashboard"
+
+
+def _restart_dashboard() -> str:
+    """Restart the process serving this page.
+
+    The poller and the dashboard are separate long-lived processes, so a
+    `git pull` plus "Restart poller" leaves this page on the old build —
+    which reads as a fix that didn't work, since the stale banner is still
+    there afterwards.
+
+    --no-block matters: without it systemctl waits for the stop, and the
+    stop kills the very process that has to write this response, so the
+    browser gets a dropped connection instead of a confirmation.
+    """
+    if checks._run(["systemctl", "cat", DASHBOARD_UNIT])[0] != 0:
+        raise RuntimeError(
+            f"the dashboard isn't running as a service, so it can't restart "
+            f"itself safely — nothing would start it again. Install it as one "
+            f"with ./systemd/install-service.sh dashboard, or restart it the "
+            f"way you started it (close the launcher window and reopen it)."
+        )
+    code, out = checks._run(
+        ["sudo", "-n", "systemctl", "restart", "--no-block", DASHBOARD_UNIT], timeout=30
+    )
+    if code != 0:
+        raise RuntimeError(
+            f"{out or 'permission denied'} — run manually: "
+            f"sudo systemctl restart {DASHBOARD_UNIT}"
+        )
+    return (
+        f"Restarting {DASHBOARD_UNIT} — wait a few seconds and reload this page. "
+        "The version in the header should change."
+    )
+
+
 def _do_action(name: str, config_path: Path, form) -> str:
     """Run a dashboard action. Reuses the CLI so behavior can't drift."""
     exe = Path(os.sys.executable).parent / "etsy-auto-print"
@@ -775,6 +882,9 @@ def _do_action(name: str, config_path: Path, form) -> str:
                 f"sudo systemctl restart {SERVICE_UNIT}"
             )
         return f"Restarted {SERVICE_UNIT}."
+
+    if name == "restart-dashboard":
+        return _restart_dashboard()
 
     if name == "retry":
         rid = form.get("receipt_id", "").strip()

@@ -421,3 +421,58 @@ def test_the_fix_can_be_saved_from_the_page(stale_parcel_client, app_dir):
     # ...and the config loads again afterwards.
     from etsy_auto_print.config import load_config
     assert load_config(app_dir / "config.toml").labels.item_parcels == {"MUG-1": "small"}
+
+
+# --- restarting the right process -------------------------------------------
+
+
+def test_the_stale_banner_offers_the_button_that_actually_fixes_it(client, monkeypatch):
+    # "Restart poller" restarts the wrong process, and the banner sits right
+    # above it — so the obvious click looks like a fix that didn't work.
+    monkeypatch.setattr(dashboard, "version_label", lambda: "0.2.0 (new)")
+    monkeypatch.setattr(dashboard, "running_version", lambda: "0.1.0 (old)")
+    text = client.get("/").get_data(as_text=True)
+    assert "restart-dashboard" in text
+    assert "Restart poller does not fix this" in text
+
+
+def test_both_restarts_are_offered_and_named_apart(client):
+    text = client.get("/").get_data(as_text=True)
+    assert ">Restart poller<" in text
+    assert ">Restart dashboard<" in text
+
+
+def test_restarting_the_dashboard_uses_no_block(monkeypatch):
+    # Without --no-block, systemctl waits for the stop — and the stop kills
+    # the process that still has to write the HTTP response.
+    calls = []
+
+    def fake_run(cmd, timeout=10):
+        calls.append(cmd)
+        return (0, "")
+
+    monkeypatch.setattr(dashboard.checks, "_run", fake_run)
+    out = dashboard._restart_dashboard()
+    assert "--no-block" in calls[-1]
+    assert dashboard.DASHBOARD_UNIT in calls[-1]
+    assert "reload this page" in out
+
+
+def test_it_refuses_when_there_is_no_dashboard_service(monkeypatch):
+    # Killing a dashboard nothing would restart leaves the user with no
+    # dashboard at all, which is worse than the stale banner.
+    monkeypatch.setattr(
+        dashboard.checks, "_run",
+        lambda cmd, timeout=10: (1, "No files found for etsy-auto-print-dashboard.service"),
+    )
+    with pytest.raises(RuntimeError, match="install-service.sh dashboard"):
+        dashboard._restart_dashboard()
+
+
+def test_a_denied_sudo_says_what_to_run(monkeypatch):
+    def fake_run(cmd, timeout=10):
+        return (0, "") if cmd[0] == "systemctl" else (1, "sudo: a password is required")
+
+    monkeypatch.setattr(dashboard.checks, "_run", fake_run)
+    with pytest.raises(RuntimeError, match="sudo systemctl restart"):
+        dashboard._restart_dashboard()
