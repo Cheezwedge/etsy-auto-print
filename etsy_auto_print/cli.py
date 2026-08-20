@@ -11,6 +11,7 @@
     etsy-auto-print products          configured SKUs, weights and boxes
     etsy-auto-print listings          check live listings against those SKUs
     etsy-auto-print test-order        one fake order, slip + label, end to end
+    etsy-auto-print print-label FILE  print a label bought elsewhere
     etsy-auto-print refund ID         request postage back on an unused label
 """
 
@@ -40,7 +41,7 @@ from .labels import (
 )
 from .notify import Notifier
 from .pipeline import StockWatcher, advance_order, poll_once, reprint
-from .printer import FilePrinter, get_printer
+from .printer import FilePrinter, PrintError, get_printer
 from .shippo import ShippoError, make_client
 from .slip import render_packing_slip
 from .store import Store
@@ -368,6 +369,46 @@ def cmd_listings(config, args) -> int:
         return 1
     print(f"\n{len(listings)} active listing(s), every SKU has a weight. "
           "Safe to take an order.")
+    return 0
+
+
+_PRINTABLE = {"pdf": "pdf", "png": "png", "zpl": "zpl", "txt": "zpl"}
+
+
+def cmd_print_label(config, args) -> int:
+    """Send a label file straight to the label printer.
+
+    For labels this program didn't buy — an international one bought through
+    Etsy because it fills in the customs form, or a re-download from the
+    Shippo dashboard. Uses the same queue and the same raw/rendered choice
+    the pipeline uses, so the output matches what a normal order produces.
+    """
+    path = Path(args.path)
+    if not path.is_file():
+        print(f"No such file: {path}", file=sys.stderr)
+        return 1
+    ext = path.suffix.lstrip(".").lower()
+    if ext not in _PRINTABLE:
+        print(
+            f"Don't know how to print {path.suffix or 'a file with no extension'!r} — "
+            f"expected one of: {', '.join(sorted(set(_PRINTABLE)))}",
+            file=sys.stderr,
+        )
+        return 1
+
+    data = path.read_bytes()
+    if not data:
+        print(f"{path} is empty.", file=sys.stderr)
+        return 1
+
+    printer = get_printer(config)
+    for copy in range(max(1, args.copies)):
+        try:
+            destination = printer.print_bytes(path.stem, data, ext)
+        except PrintError as exc:
+            print(f"Print failed: {exc}", file=sys.stderr)
+            return 1
+        print(f"{path.name} -> {destination}")
     return 0
 
 
@@ -959,6 +1000,13 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser(
         "listings", help="check every live Etsy listing has a SKU you can ship"
     ).set_defaults(func=cmd_listings)
+
+    p = sub.add_parser(
+        "print-label", help="send a PDF/PNG/ZPL label file to the label printer"
+    )
+    p.add_argument("path", help="the label file, e.g. one downloaded from Etsy")
+    p.add_argument("--copies", type=int, default=1)
+    p.set_defaults(func=cmd_print_label)
 
     p = sub.add_parser(
         "test-order",

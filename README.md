@@ -111,6 +111,7 @@ etsy-auto-print poll            # orders now advance: slip -> label
 etsy-auto-print reprint-label 123
 etsy-auto-print retry 123       # re-run a held order after fixing the cause
 etsy-auto-print refund 123      # ask for the postage back on an unused label
+etsy-auto-print print-label FILE  # print a label bought elsewhere (e.g. Etsy)
 ```
 
 With the test token everything behaves like production except the labels are
@@ -174,6 +175,25 @@ service level, package weight and dimensions, what the label cost, and the
 ship date — which Etsy uses to give buyers faster tracking updates. All of it
 is optional: if Etsy rejects any of it, the tracking number is re-sent on its
 own rather than holding an order the buyer is waiting on.
+
+### International orders
+
+International shipments need a customs declaration, which this program does
+not build — so an international order **holds** with a message naming the
+destination, after printing its packing slip and spending nothing. Buy that
+label on Etsy, which fills the customs form in from the order itself, and
+print it on the same thermal printer:
+
+```bash
+etsy-auto-print print-label ~/etsy-label.pdf
+```
+
+Choose the 4x6 format in Etsy's print dialog. Some services and destinations
+require the full-page multi-part customs form instead, which a 4x6 thermal
+printer cannot produce — those go on ordinary paper.
+
+Once Etsy marks the order shipped, the poller notices it left the open-orders
+list, confirms it against the receipt and closes it out here automatically.
 
 ### If a label is never going to be used
 
