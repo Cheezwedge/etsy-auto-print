@@ -272,6 +272,18 @@ class Labeler:
             )
 
         address_to = build_address_to(receipt)
+        if address_to["country"] != self.config.ship_from.get("country", "US"):
+            # Stop here rather than let the carrier reject it. Shippo can buy
+            # international labels, but only with a customs declaration, and
+            # that needs per-item data (description, value, country of origin)
+            # nobody can invent. Failing at the carrier instead reads like a
+            # bug and burns an address-validation and shipment call first.
+            raise LabelError(
+                f"international order to {address_to['country']} — this program "
+                "cannot buy it, because customs declarations are not configured. "
+                "Buy this one on Etsy (Etsy fills in the customs form from the "
+                "order), then it will close out here on its own."
+            )
         try:
             created = self.client.create_address(address_to, validate=True)
         except ShippoError as exc:

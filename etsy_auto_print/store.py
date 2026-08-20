@@ -159,6 +159,16 @@ class Store:
             "SELECT * FROM orders WHERE state = ? ORDER BY created_at", (state,)
         ).fetchall()
 
+    def unfinished(self) -> list[sqlite3.Row]:
+        """Orders this program still considers its problem.
+
+        Everything except 'done' — including 'held', which is precisely the
+        state an order sits in when someone fulfils it another way.
+        """
+        return self.conn.execute(
+            "SELECT * FROM orders WHERE state != 'done' ORDER BY created_at"
+        ).fetchall()
+
     def all_orders(self) -> list[sqlite3.Row]:
         return self.conn.execute("SELECT * FROM orders ORDER BY created_at").fetchall()
 

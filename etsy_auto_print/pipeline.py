@@ -97,6 +97,7 @@ def poll_once(
 
     receipts = client.get_open_receipts()
     log.info("Poll: %d open (paid, unshipped) receipt(s)", len(receipts))
+    reconcile(client, store, {r["receipt_id"] for r in receipts})
 
     progressed = 0
     for receipt in receipts:
@@ -124,6 +125,59 @@ def is_digital_only(receipt: dict) -> bool:
     return bool(transactions) and all(
         txn.get("is_digital") is True for txn in transactions
     )
+
+
+def was_fulfilled_elsewhere(receipt: dict) -> str:
+    """Why Etsy no longer considers this order outstanding, if it doesn't.
+
+    Returns a reason to close the order with, or "" to leave it alone.
+    Deliberately conservative: an unrecognised shape means do nothing, since
+    wrongly closing a live order means it never ships.
+    """
+    if receipt.get("is_shipped") is True:
+        return "shipped outside this program — marked shipped on Etsy"
+    status = str(receipt.get("status") or "").lower()
+    if "cancel" in status or "refund" in status:
+        return f"no longer to be shipped — Etsy status is {status!r}"
+    return ""
+
+
+def reconcile(client: EtsyClient, store: Store, open_ids: set[int]) -> int:
+    """Close out orders Etsy has stopped listing as awaiting shipment.
+
+    An international order bought through Etsy, or an order cancelled there,
+    vanishes from the open-receipts poll — and would otherwise sit 'held' in
+    here forever, keeping a permanent "needs attention" on the dashboard for
+    something already dealt with.
+
+    Absence from the poll is only the trigger. Each candidate is confirmed by
+    fetching the receipt, because an Etsy hiccup returning an empty list must
+    never silently close every order in flight.
+    """
+    closed = 0
+    for row in store.unfinished():
+        rid = row["receipt_id"]
+        if rid in open_ids:
+            continue
+        try:
+            receipt = client.get_receipt(rid)
+        except EtsyApiError as exc:
+            if exc.status == 404:
+                # Etsy has no such receipt — a fake order from `test-order`,
+                # or one deleted outright. Closing it stops us re-asking
+                # about it on every single poll, forever.
+                store.transition(rid, "done", "no such receipt on Etsy")
+                closed += 1
+                continue
+            log.debug("Order #%s: could not re-check (%s)", rid, exc)
+            continue
+        reason = was_fulfilled_elsewhere(receipt)
+        if not reason:
+            continue
+        store.transition(rid, "done", reason)
+        log.info("Order #%s closed: %s", rid, reason)
+        closed += 1
+    return closed
 
 
 def advance_order(
