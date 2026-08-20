@@ -8,6 +8,7 @@ repo root or from systemd.
 from __future__ import annotations
 
 import csv
+import sys
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -367,12 +368,32 @@ def _load_labels(raw: dict, base: Path) -> LabelConfig:
     )
 
 
+def installed_config_path() -> Path:
+    """Where config.toml lives for an editable install of this checkout.
+
+    `ssh host 'etsy-auto-print ...'` runs in the home directory, not the
+    project, so a bare relative config.toml isn't there. Falling back to the
+    checkout means one-liners over SSH work; it's announced rather than
+    silent, so it can't quietly pick up a config you didn't mean.
+    """
+    return Path(__file__).resolve().parent.parent / DEFAULT_CONFIG_NAME
+
+
 def load_config(path: str | Path | None = None) -> Config:
     cfg_path = Path(path) if path else Path(DEFAULT_CONFIG_NAME)
+    if not cfg_path.exists() and path is None:
+        fallback = installed_config_path()
+        if fallback.exists():
+            print(f"Using {fallback}", file=sys.stderr)
+            cfg_path = fallback
     if not cfg_path.exists():
+        looked = Path.cwd()
         raise ConfigError(
-            f"Config file not found: {cfg_path}. "
-            "Copy config.example.toml to config.toml and fill in your keystring."
+            f"Config file not found: {cfg_path} (looked in {looked}).\n"
+            f"If you meant the one in your project, either cd there first or "
+            f"pass -c /path/to/config.toml.\n"
+            "Starting from scratch? Copy config.example.toml to config.toml "
+            "and fill in your keystring."
         )
     with open(cfg_path, "rb") as f:
         try:

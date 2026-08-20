@@ -273,3 +273,65 @@ def test_a_bad_box_name_in_toml_points_at_the_toml(tmp_path):
                     extra='[labels.item_parcels]\n"SKU-A" = "nope"\n')
     with pytest.raises(ConfigError, match="nope"):
         load_config(cfg)
+
+
+# --- finding the config from somewhere else --------------------------------
+
+
+def test_a_missing_config_says_where_it_looked(tmp_path, monkeypatch):
+    # `ssh host 'etsy-auto-print ...'` runs in the home directory, and
+    # "Config file not found: config.toml" gives no clue that the cwd is why.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "etsy_auto_print.config.installed_config_path", lambda: tmp_path / "nope.toml"
+    )
+    with pytest.raises(ConfigError) as caught:
+        load_config()
+    message = str(caught.value)
+    assert str(tmp_path) in message
+    assert "cd there first" in message and "-c " in message
+
+
+def test_it_falls_back_to_the_checkout_when_run_from_elsewhere(tmp_path, monkeypatch, capsys):
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "config.toml").write_text(
+        BASE + "[labels]\nenabled = false\n"
+    )
+    elsewhere = tmp_path / "home"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    monkeypatch.setattr(
+        "etsy_auto_print.config.installed_config_path", lambda: project / "config.toml"
+    )
+    assert load_config().keystring == "k"
+    # Announced, not silent — it must never quietly load a config you didn't mean.
+    assert str(project / "config.toml") in capsys.readouterr().err
+
+
+def test_an_explicit_path_never_falls_back(tmp_path, monkeypatch):
+    # -c means that file and no other; guessing would be worse than failing.
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "config.toml").write_text(BASE + "[labels]\nenabled = false\n")
+    monkeypatch.setattr(
+        "etsy_auto_print.config.installed_config_path", lambda: project / "config.toml"
+    )
+    with pytest.raises(ConfigError, match="not found"):
+        load_config(tmp_path / "typo.toml")
+
+
+def test_a_config_in_the_cwd_still_wins(tmp_path, monkeypatch):
+    here = tmp_path / "here"
+    here.mkdir()
+    (here / "config.toml").write_text(BASE + '[labels]\nenabled = false\n')
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / "config.toml").write_text(
+        '[etsy]\nkeystring = "WRONG"\nshared_secret = "s"\n[labels]\nenabled = false\n'
+    )
+    monkeypatch.chdir(here)
+    monkeypatch.setattr(
+        "etsy_auto_print.config.installed_config_path", lambda: other / "config.toml"
+    )
+    assert load_config().keystring == "k"
