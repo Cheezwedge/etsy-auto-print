@@ -134,6 +134,11 @@ ntfy_url = "https://ntfy.sh/your-secret-topic-name"
 etsy-auto-print test-notify   # should pop up on your phone
 ```
 
+You get a push when an order has printed and is ready to pack (with what to
+put in the box), and when one is held or a listing sells out. Set
+`on_order = false` under `[notify]` if you ship all day and only want to hear
+about problems.
+
 ### 7. Going live
 
 First, with the **test** token still in place:

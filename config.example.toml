@@ -209,6 +209,13 @@ interval_minutes = 60   # how often to sweep; minimum 5
 # (https://ntfy.sh — free, no account needed) on your phone or browser.
 
 [notify]
+# A push when an order has printed and is ready to pack. On by default: the
+# label appearing on the printer only counts as a notification if you happen
+# to be standing next to it, and silence would otherwise mean either "nothing
+# sold" or "something sold and you missed it". Set false if you ship all day
+# and only want to hear about problems.
+on_order = true
+
 # Either or both may be set — every configured channel gets every alert.
 # ntfy.sh: https://ntfy.sh/your-secret-topic-name (pick a hard-to-guess name;
 # ntfy.sh is a public server, so the topic name is effectively a password).

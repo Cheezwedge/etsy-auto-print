@@ -162,3 +162,93 @@ def test_a_missing_is_digital_flag_is_treated_as_physical(tmp_path):
     store.register(receipt)
     advance_order(receipt, store, printer)
     assert store.get(555)["state"] == "slip_printed"
+
+
+# --- telling you an order arrived -------------------------------------------
+
+
+class Recorder:
+    def __init__(self, on_order=True):
+        self.on_order = on_order
+        self.sent = []
+
+    def send(self, title, message):
+        self.sent.append((title, message))
+
+    def send_order_ready(self, title, message):
+        if self.on_order:
+            self.send(title, message)
+
+
+def paid_receipt():
+    return {
+        "receipt_id": 700, "name": "A Buyer",
+        "transactions": [
+            {"title": "Adapters", "sku": "TPU-A", "quantity": 2, "is_digital": False}
+        ],
+    }
+
+
+def test_a_printed_order_says_so(tmp_path):
+    # A working order used to be completely silent: the label just appeared on
+    # the printer, which is only a notification if you're standing next to it.
+    store = Store(tmp_path / "orders.db")
+    receipt = paid_receipt()
+    store.register(receipt)
+    notifier = Recorder()
+
+    advance_order(receipt, store, FilePrinter(tmp_path / "outbox"), notifier=notifier)
+    assert len(notifier.sent) == 1
+    title, message = notifier.sent[0]
+    assert "700" in title and "ready to pack" in title
+    assert "2 x TPU-A" in message          # what actually goes in the box
+    assert "A Buyer" in message
+
+
+def test_it_does_not_repeat_on_every_poll(tmp_path):
+    store = Store(tmp_path / "orders.db")
+    printer = FilePrinter(tmp_path / "outbox")
+    receipt = paid_receipt()
+    store.register(receipt)
+    notifier = Recorder()
+
+    advance_order(receipt, store, printer, notifier=notifier)
+    advance_order(receipt, store, printer, notifier=notifier)
+    advance_order(receipt, store, printer, notifier=notifier)
+    assert len(notifier.sent) == 1
+
+
+def test_a_held_order_gets_the_problem_alert_not_the_ready_one(tmp_path):
+    class Broken(FilePrinter):
+        def print_slip(self, *a):
+            raise PrintError("printer offline")
+
+    store = Store(tmp_path / "orders.db")
+    receipt = paid_receipt()
+    store.register(receipt)
+    notifier = Recorder()
+
+    advance_order(receipt, store, Broken(tmp_path / "outbox"), notifier=notifier)
+    assert len(notifier.sent) == 1
+    assert "needs attention" in notifier.sent[0][0]
+
+
+def test_a_shop_that_ships_all_day_can_turn_it_off(tmp_path):
+    store = Store(tmp_path / "orders.db")
+    receipt = paid_receipt()
+    store.register(receipt)
+    notifier = Recorder(on_order=False)
+
+    advance_order(receipt, store, FilePrinter(tmp_path / "outbox"), notifier=notifier)
+    assert notifier.sent == []
+
+
+def test_a_digital_order_is_not_announced_as_ready_to_pack(tmp_path):
+    # It goes straight to done with nothing to pack; a "ready to pack" push
+    # would send someone to an empty printer.
+    store = Store(tmp_path / "orders.db")
+    receipt = digital_receipt()
+    store.register(receipt)
+    notifier = Recorder()
+    advance_order(receipt, store, FilePrinter(tmp_path / "outbox"), notifier=notifier)
+    assert notifier.sent == []

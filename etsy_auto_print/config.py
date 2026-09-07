@@ -123,6 +123,7 @@ class Config:
     pushover_user_key: str | None
     pushover_api_token: str | None
     dashboard_password: str | None
+    notify_on_order: bool
 
     @property
     def redirect_uri(self) -> str:
@@ -460,4 +461,5 @@ def load_config(path: str | Path | None = None) -> Config:
         pushover_user_key=raw.get("notify", {}).get("pushover_user_key") or None,
         pushover_api_token=raw.get("notify", {}).get("pushover_api_token") or None,
         dashboard_password=raw.get("dashboard", {}).get("password") or None,
+        notify_on_order=bool(raw.get("notify", {}).get("on_order", True)),
     )

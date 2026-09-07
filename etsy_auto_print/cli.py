@@ -92,7 +92,8 @@ def _build_labeler(config: Config, store: Store, printer) -> Labeler | None:
 
 
 def _build_notifier(config: Config) -> Notifier:
-    return Notifier(config.ntfy_url, config.pushover_user_key, config.pushover_api_token)
+    return Notifier(config.ntfy_url, config.pushover_user_key,
+                    config.pushover_api_token, on_order=config.notify_on_order)
 
 
 def cmd_auth(config, args) -> int:

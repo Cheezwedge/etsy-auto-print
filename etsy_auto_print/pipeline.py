@@ -191,6 +191,7 @@ def advance_order(
     """Advance one order as far as it can go. Returns True if it moved."""
     rid = receipt["receipt_id"]
     moved = False
+    started_in = store.get(rid)["state"]
 
     def hold(reason: str) -> None:
         log.error("Order #%s held: %s", rid, reason)
@@ -237,7 +238,30 @@ def advance_order(
             hold(result)
             return False
 
+    # An order that worked used to say nothing at all: the label just appeared
+    # on the printer. That's fine standing next to it and useless anywhere
+    # else, and it makes silence ambiguous — no alert meant either "nothing
+    # sold" or "something sold and you didn't notice".
+    # Every step that could run has run by now, so whatever state the order
+    # landed in is where it rests: label_printed or done with labels on,
+    # slip_printed for a slip-only shop. Anything held has already alerted.
+    ended_in = store.get(rid)["state"]
+    if notifier and ended_in != started_in and ended_in != "held":
+        notifier.send_order_ready(
+            f"Etsy order #{rid} printed — ready to pack",
+            f"{receipt.get('name', '?')}\n{pack_list(receipt)}",
+        )
+
     return moved
+
+
+def pack_list(receipt: dict) -> str:
+    """What to put in the box, for a notification read away from the printer."""
+    lines = []
+    for txn in receipt.get("transactions") or []:
+        sku = txn.get("sku") or txn.get("title") or "?"
+        lines.append(f"{txn.get('quantity', 1)} x {sku}")
+    return "\n".join(lines) or "(no items listed)"
 
 
 def _num(value) -> float | None:

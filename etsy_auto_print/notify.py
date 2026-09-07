@@ -31,10 +31,19 @@ class Notifier:
         ntfy_url: str | None = None,
         pushover_user_key: str | None = None,
         pushover_api_token: str | None = None,
+        on_order: bool = True,
     ):
         self.ntfy_url = ntfy_url
         self.pushover_user_key = pushover_user_key
         self.pushover_api_token = pushover_api_token
+        # Whether a *successful* order is worth a push. On by default: the
+        # label appearing on the printer is only a notification if you happen
+        # to be standing next to it. A shop shipping all day can turn it off.
+        self.on_order = on_order
+
+    def send_order_ready(self, title: str, message: str) -> None:
+        if self.on_order:
+            self.send(title, message)
 
     def send(self, title: str, message: str) -> None:
         log.warning("NOTIFY: %s — %s", title, message)
