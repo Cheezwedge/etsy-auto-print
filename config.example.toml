@@ -17,6 +17,14 @@ shared_secret = "your-etsy-app-shared-secret"
 # Register that exact URL as a Callback URL in your Etsy app settings.
 redirect_port = 8231
 
+# Permissions that are wanted but not essential. listings_r is the only way
+# to see a listing Etsy has marked sold out; without it, stock monitoring
+# infers a sell-out from a listing disappearing instead. Etsy does not always
+# grant it — a personal app with provisional access can come back without it,
+# which is not something you can fix. Set this to [] to stop asking for it and
+# stop being warned about it.
+# optional_scopes = ["listings_r"]
+
 [poll]
 # How often `run` checks for new paid, unshipped orders.
 interval_seconds = 180

@@ -24,7 +24,7 @@ from pathlib import Path
 
 import requests
 
-from .config import OAUTH_SCOPES, Config
+from .config import Config
 
 CONNECT_URL = "https://www.etsy.com/oauth/connect"
 TOKEN_URL = "https://api.etsy.com/v3/public/oauth/token"
@@ -176,7 +176,7 @@ def authorize(config: Config, open_browser: bool = True) -> TokenStore:
         "response_type": "code",
         "client_id": config.keystring,
         "redirect_uri": config.redirect_uri,
-        "scope": OAUTH_SCOPES,
+        "scope": config.oauth_scopes,
         "state": state,
         "code_challenge": challenge,
         "code_challenge_method": "S256",

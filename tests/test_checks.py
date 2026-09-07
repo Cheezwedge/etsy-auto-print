@@ -6,6 +6,7 @@ from etsy_auto_print.config import OAUTH_SCOPES, REQUIRED_SCOPES
 
 class StubConfig:
     api_key = "key:secret"
+    optional_scopes = ("listings_r",)
 
 
 class Resp:
@@ -278,3 +279,19 @@ def test_a_token_with_everything_is_ok(monkeypatch):
 def test_a_missing_required_scope_still_fails(monkeypatch):
     stub_scopes(monkeypatch, ["transactions_r", "listings_r"])
     assert checks.check_etsy_scopes(StubConfig()).state == checks.FAIL
+
+
+def test_a_scope_you_have_stopped_asking_for_is_not_reported(monkeypatch):
+    # Etsy doesn't always grant an optional scope, and a shop that can't get
+    # one shouldn't be nagged about it on every dashboard load forever.
+    class NoOptional(StubConfig):
+        optional_scopes = ()
+
+    stub_scopes(monkeypatch, REQUIRED_SCOPES.split())
+    assert checks.check_etsy_scopes(NoOptional()).state == checks.OK
+
+
+def test_the_warning_says_how_to_stop_asking(monkeypatch):
+    stub_scopes(monkeypatch, REQUIRED_SCOPES.split())
+    hint = checks.check_etsy_scopes(StubConfig()).hint
+    assert "optional_scopes = []" in hint

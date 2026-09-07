@@ -81,6 +81,7 @@ class Config:
     keystring = "k"
     shared_secret = "s"
     redirect_port = 8231
+    oauth_scopes = "transactions_r transactions_w shops_r listings_r"
 
     @property
     def redirect_uri(self):

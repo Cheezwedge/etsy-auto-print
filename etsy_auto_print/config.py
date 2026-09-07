@@ -25,8 +25,15 @@ REQUIRED_SCOPES = "transactions_r transactions_w shops_r"
 # entirely, so without it a sold-out listing is invisible rather than
 # reported. Everything else works without it, so a token granted before this
 # existed keeps working and stock monitoring degrades instead of failing.
-OPTIONAL_SCOPES = "listings_r"
+#
+# Etsy does not always grant it: a personal app with provisional access can
+# come back with the scope simply absent. That is not something the shop can
+# fix, so [etsy] optional_scopes = [] stops both asking for it and warning
+# about its absence — a permanent amber row you cannot act on is worse than
+# no row at all.
+DEFAULT_OPTIONAL_SCOPES = ("listings_r",)
 
+OPTIONAL_SCOPES = " ".join(DEFAULT_OPTIONAL_SCOPES)
 OAUTH_SCOPES = f"{REQUIRED_SCOPES} {OPTIONAL_SCOPES}"
 
 
@@ -124,6 +131,12 @@ class Config:
     pushover_api_token: str | None
     dashboard_password: str | None
     notify_on_order: bool
+    optional_scopes: tuple
+
+    @property
+    def oauth_scopes(self) -> str:
+        """What to ask Etsy for at the consent screen."""
+        return " ".join((*REQUIRED_SCOPES.split(), *self.optional_scopes))
 
     @property
     def redirect_uri(self) -> str:
@@ -462,4 +475,7 @@ def load_config(path: str | Path | None = None) -> Config:
         pushover_api_token=raw.get("notify", {}).get("pushover_api_token") or None,
         dashboard_password=raw.get("dashboard", {}).get("password") or None,
         notify_on_order=bool(raw.get("notify", {}).get("on_order", True)),
+        optional_scopes=tuple(
+            etsy.get("optional_scopes", DEFAULT_OPTIONAL_SCOPES)
+        ),
     )

@@ -335,3 +335,31 @@ def test_a_config_in_the_cwd_still_wins(tmp_path, monkeypatch):
         "etsy_auto_print.config.installed_config_path", lambda: other / "config.toml"
     )
     assert load_config().keystring == "k"
+
+
+# --- optional scopes -------------------------------------------------------
+
+
+def minimal(tmp_path, etsy_extra=""):
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(
+        '[etsy]\nkeystring = "k"\nshared_secret = "s"\n' + etsy_extra
+        + "[labels]\nenabled = false\n"
+    )
+    return load_config(cfg)
+
+
+def test_listings_r_is_requested_by_default(tmp_path):
+    config = minimal(tmp_path)
+    assert config.optional_scopes == ("listings_r",)
+    assert "listings_r" in config.oauth_scopes
+
+
+def test_asking_for_nothing_optional_still_asks_for_the_essentials(tmp_path):
+    # Etsy may refuse an optional scope outright; dropping it must not drop
+    # the three the pipeline cannot work without.
+    config = minimal(tmp_path, "optional_scopes = []\n")
+    assert config.optional_scopes == ()
+    assert "listings_r" not in config.oauth_scopes
+    for scope in ("transactions_r", "transactions_w", "shops_r"):
+        assert scope in config.oauth_scopes

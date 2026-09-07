@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 import requests
 
 from .auth import TokenStore
-from .config import OPTIONAL_SCOPES, REQUIRED_SCOPES, Config
+from .config import REQUIRED_SCOPES, Config
 from . import stock
 from .etsy import EtsyClient, ping
 from .store import Store
@@ -91,7 +91,9 @@ def check_etsy_scopes(config: Config) -> Check:
     on a live order.
     """
     required = set(REQUIRED_SCOPES.split())
-    optional = set(OPTIONAL_SCOPES.split())
+    # Configured, not constant: Etsy doesn't always grant an optional scope,
+    # and a shop that can't get one shouldn't be told about it forever.
+    optional = set(config.optional_scopes or ())
     tokens = TokenStore(config)
     if not tokens.authorized:
         # The row above already reports this as a failure; don't double-count it.
@@ -120,8 +122,9 @@ def check_etsy_scopes(config: Config) -> Check:
         return Check(
             "Etsy permissions", WARN,
             f"{' '.join(sorted(granted))} (no {', '.join(absent)})",
-            "Re-run `etsy-auto-print auth` to add it — without listings_r, a "
-            "sold-out listing can only be guessed at, not read",
+            "Re-run `etsy-auto-print auth` to add it. If Etsy won't grant it "
+            "to your app, set optional_scopes = [] under [etsy] to stop asking "
+            "— stock monitoring falls back to inferring a sell-out.",
         )
     return Check("Etsy permissions", OK, " ".join(sorted(granted)))
 
