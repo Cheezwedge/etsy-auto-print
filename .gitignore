@@ -4,6 +4,19 @@ tokens.json
 orders.db
 outbox/
 
+# The dashboard keeps the previous config as a .bak before each save, so a
+# backup holds the same live Shippo token and Etsy shared secret the real
+# config does. Ignoring only config.toml would leave the copy exposed.
+config.toml.bak
+*.bak
+.validate-*
+
+# Printed output: labels and slips, including buyer names and addresses.
+label/
+
+# Your real product list. items.example.csv is the one that ships.
+items.csv
+
 __pycache__/
 *.pyc
 *.egg-info/

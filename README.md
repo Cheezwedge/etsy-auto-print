@@ -1,18 +1,52 @@
 # etsy-auto-print
 
-Automatically process Etsy orders as they come in (see [DESIGN.md](DESIGN.md)):
-polls your shop for paid, unshipped orders, prints a packing slip, buys a
-shipping label via Shippo and prints it, then posts the tracking number back
-to Etsy — which marks the order shipped and emails your buyer. Exactly once
-per order, with every failure held for review (and pushed to your phone via
-ntfy if configured) instead of guessed at.
+Prints the packing slip and a prepaid shipping label for each new Etsy order,
+then marks the order shipped on Etsy with its tracking number. Runs unattended
+on a Raspberry Pi next to a label printer. See [DESIGN.md](DESIGN.md) for how
+it works internally.
 
-The full loop is: **order placed → slip + prepaid label printed → order
-marked shipped with tracking — hands off.**
+**How it actually runs, stated plainly:**
 
-No printer yet? The default `file` printer backend writes each slip into an
-`outbox/` folder so you can run the whole pipeline today; switching to a real
-printer later is a two-line config change.
+- **It polls; it is not instant.** Etsy offers no order webhook, so this asks
+  Etsy for paid-but-unshipped orders on a timer — every 3 minutes by default
+  (`poll.interval_seconds`). A new order is picked up within one interval, not
+  the moment it is placed.
+- **Postage comes from Shippo, not Etsy.** You need a free
+  [Shippo](https://goshippo.com) account with a card on file; labels are
+  charged there, not deducted from your Etsy payment account, and Shippo's
+  pay-as-you-go plan adds a small per-label fee. Rates are USPS commercial
+  pricing, much the same as Etsy's own. Until `labels.allow_live = true` the
+  program refuses live tokens outright, so it cannot spend money by accident.
+- **Anything unexpected holds the order and stops.** A failure never guesses:
+  the order is marked `held`, nothing further is printed or bought, and you
+  get a push notification. It is never retried automatically — a held order
+  waits for you to fix the cause and run `retry <id>`. That is the deliberate
+  trade: an order that sits still is recoverable, an order shipped wrong is
+  not.
+
+Each step runs at most once per order, and a purchase *attempt* is recorded
+before money moves, so a crash mid-purchase holds the order rather than
+risking a second label.
+
+No printer yet? The default `file` backend writes each slip and label into an
+`outbox/` folder, so the whole pipeline runs today; switching to a real printer
+is a two-line config change.
+
+## What it does not do
+
+- **International orders.** These need a customs declaration, which this
+  program does not build — so an international order prints its slip, holds,
+  and tells you to buy that one label on Etsy (which fills the customs form in
+  from the order). `print-label` then prints that PDF on the same thermal
+  printer, converting it to ZPL if your queue is raw. Needs `poppler-utils`.
+- **Carriers other than USPS**, unless you change `allowed_providers`. Only
+  USPS services are mapped out of the box.
+- **Multiple boxes per order.** One order ships as one parcel; an order too
+  big for the largest configured box holds.
+- **Multiple shops**, or anything multi-tenant. One shop, one config, one
+  SQLite file.
+- **Printing over the network.** The printer must be on the machine running
+  the poller, as a CUPS queue.
 
 ## Setup
 
@@ -244,6 +278,24 @@ guide in [docs/RASPBERRY_PI.md](docs/RASPBERRY_PI.md).
   is retried only when you say so (`retry`).
 - Every state change is recorded in an audit trail (`show <id>`).
 
+### Secrets
+
+Your credentials and buyer data live only on your machine and are gitignored,
+never committed: `config.toml` (Etsy shared secret, live Shippo token,
+dashboard password), `tokens.json` (OAuth refresh token, `chmod 600`),
+`orders.db` (buyer names and addresses), `items.csv`, and the `outbox/` and
+`label/` output directories. So is `config.toml.bak` — the dashboard writes
+one before each save, and it holds the same secrets the live config does.
+
+If you fork this, check `git status` before your first commit rather than
+trusting the list. Nothing in the repository's history has ever contained a
+credential, and it is worth keeping that true.
+
+`etsy-auto-print dump-receipt` redacts buyer details unless you pass `--raw`;
+don't paste raw output anywhere. The dashboard binds to localhost and refuses
+a network-facing bind without a password, because the page shows tokens that
+can spend money.
+
 ## When you buy a printer
 
 Any 4x6 thermal label printer with a CUPS driver works (Rollo, Munbyn,
@@ -268,3 +320,7 @@ there instead.
 ```bash
 pytest
 ```
+
+## License
+
+MIT — see [LICENSE](LICENSE).
