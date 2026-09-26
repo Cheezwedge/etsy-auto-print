@@ -645,6 +645,16 @@ def cmd_dashboard(config, args) -> int:
     return 0
 
 
+def _marked_shipped_at(receipt: dict):
+    """When Etsy was told this order shipped, if it has been."""
+    stamps = [
+        s.get("shipment_notification_timestamp") or s.get("created_timestamp")
+        for s in receipt.get("shipments") or []
+    ] + [t.get("shipped_timestamp") for t in receipt.get("transactions") or []]
+    stamps = [s for s in stamps if isinstance(s, (int, float)) and s > 0]
+    return datetime.fromtimestamp(min(stamps)) if stamps else None
+
+
 def cmd_ship_by(config, args) -> int:
     """Show the ship-by date Etsy reports for recent orders, with evidence.
 
@@ -673,6 +683,22 @@ def cmd_ship_by(config, args) -> int:
         placed_text = f"{placed:%a %b %d}" if placed else "?"
         status = str(receipt.get("status") or "")
         deadline = etsy_ship_by(receipt)
+
+        shipped_at = _marked_shipped_at(receipt)
+        if shipped_at is not None or receipt.get("is_shipped") is True:
+            # Once shipped, Etsy's expected_ship_date follows the actual ship
+            # day, so it says nothing about the deadline. What it does show
+            # is how long after placing the order Etsy was told.
+            placed_at = datetime.fromtimestamp(stamp) if stamp else None
+            when = f"{shipped_at:%a %b %d %H:%M}" if shipped_at else "?"
+            gap = ""
+            if placed_at and shipped_at:
+                minutes = int((shipped_at - placed_at).total_seconds() // 60)
+                gap = (f"  ({minutes} min after placed)" if minutes < 120
+                       else f"  ({minutes // 60} h after placed)")
+            placed_when = f"{placed_at:%a %b %d %H:%M}" if placed_at else "?"
+            print(f"  shipped   #{rid}  placed {placed_when}  Etsy told {when}{gap}")
+            continue
 
         if deadline:
             raw = min(t["expected_ship_date"] for t in txns
@@ -717,8 +743,10 @@ def cmd_ship_by(config, args) -> int:
         print(f"{missing} open order(s) had no usable ship-by date; those fall "
               "back to the next business day.")
         return 1
-    if not same_day:
-        print('Ship-by dates look right. Safe to use mark_shipped = "carrier_scan".')
+    if not same_day and not missing:
+        print("Only orders not yet shipped show a real ship-by deadline — Etsy "
+              "rewrites it once an order ships.\nIf the open orders above look "
+              'right, it\'s safe to use mark_shipped = "carrier_scan".')
     return 0
 
 

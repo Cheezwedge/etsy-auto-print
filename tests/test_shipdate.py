@@ -556,3 +556,29 @@ def test_track_reports_a_scan(store, printer, receipt, monkeypatch, capsys):
     assert cli.cmd_track(config, argparse.Namespace(receipt_id=12345)) == 0
     out = capsys.readouterr().out
     assert "Shippo status: TRANSIT" in out and "USPS has it" in out
+
+
+def test_a_shipped_order_shows_when_etsy_was_told(monkeypatch, capsys):
+    # Once shipped, Etsy's expected_ship_date follows the ship day, so it
+    # can't be read as a deadline. The useful fact is the gap: 2 minutes
+    # after placing means Etsy was told as soon as the label printed.
+    placed = int(at(2026, 9, 26, 9))
+    code = run_ship_by(monkeypatch, [{
+        "receipt_id": 7, "created_timestamp": placed, "is_shipped": True,
+        "shipments": [{"shipment_notification_timestamp": placed + 120}],
+        "transactions": [{"expected_ship_date": placed + 120}],
+    }])
+    out = capsys.readouterr().out
+    assert "shipped" in out and "Etsy told Sat Sep 26 09:02" in out
+    assert "2 min after placed" in out
+    assert "same day as placed" not in out       # not mistaken for a deadline
+
+
+def test_a_later_ship_reads_in_hours(monkeypatch, capsys):
+    placed = int(at(2026, 9, 25, 9))
+    run_ship_by(monkeypatch, [{
+        "receipt_id": 8, "created_timestamp": placed,
+        "transactions": [{"shipped_timestamp": placed + 26 * 3600,
+                          "expected_ship_date": placed + 26 * 3600}],
+    }])
+    assert "26 h after placed" in capsys.readouterr().out
