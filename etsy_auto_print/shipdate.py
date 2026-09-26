@@ -109,18 +109,31 @@ def tracking_due(
     now: datetime, printed_at: float, receipt: dict | None, policy: str, post_hour: int
 ) -> bool:
     """Is it time to tell Etsy this order shipped?"""
+    return due_reason(now, printed_at, receipt, policy, post_hour) is not None
+
+
+def due_reason(
+    now: datetime, printed_at: float, receipt: dict | None, policy: str, post_hour: int
+) -> str | None:
+    """Why it's time to tell Etsy, or None if it isn't yet.
+
+    The reason goes into the order's history. Without it, "tracking posted
+    two seconds after the label printed" can't be told apart from a bug.
+    """
     if policy == IMMEDIATELY:
-        return True
+        return "mark_shipped = immediately"
     deadline = etsy_ship_by(receipt)
     if deadline is not None and now.date() >= deadline:
         # Etsy's ship-by day has arrived: post now, whatever the hour.
-        return True
+        return f"Etsy's ship-by date ({deadline:%a %b %-d}) has arrived"
     day = ship_day(printed_at, receipt, policy)
-    if now.date() != day:
-        return now.date() > day
+    if now.date() > day:
+        return f"ship day ({day:%a %b %-d}) has passed"
     # On the ship day itself, wait for a sensible hour so the buyer's
     # "shipped" email doesn't arrive at 00:03.
-    return now.hour >= post_hour
+    if now.date() == day and now.hour >= post_hour:
+        return f"ship day ({day:%a %b %-d}), after {post_hour}:00"
+    return None
 
 
 def waits_for_carrier(policy: str, receipt: dict | None) -> bool:

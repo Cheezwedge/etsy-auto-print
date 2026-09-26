@@ -295,3 +295,41 @@ def test_the_warning_says_how_to_stop_asking(monkeypatch):
     stub_scopes(monkeypatch, REQUIRED_SCOPES.split())
     hint = checks.check_etsy_scopes(StubConfig()).hint
     assert "optional_scopes = []" in hint
+
+
+# -- a poller still running the code from before `git pull` ------------------
+
+
+def service_config(tmp_path, poller_version=None):
+    from etsy_auto_print.store import Store
+
+    db = tmp_path / "orders.db"
+    if poller_version:
+        Store(db).set_meta("poller_version", poller_version)
+    return type("C", (), {"db_path": db})()
+
+
+def active_service(monkeypatch, on_disk="0.1.0 (new1234)"):
+    monkeypatch.setattr(checks.shutil, "which", lambda name: "/bin/systemctl")
+    replies = {"is-active": "active", "show": "Sat 2026-09-26 09:00:00 PDT"}
+    monkeypatch.setattr(checks, "_run", lambda cmd, timeout=10: (0, replies[cmd[1]]))
+    monkeypatch.setattr(checks, "version_label", lambda: on_disk)
+
+
+def test_a_poller_on_old_code_warns_and_says_to_restart(tmp_path, monkeypatch):
+    active_service(monkeypatch)
+    result = checks.check_service(service_config(tmp_path, "0.1.0 (old9876)"))
+    assert result.state == checks.WARN
+    assert "old9876" in result.detail and "new1234" in result.detail
+    assert result.hint == "sudo systemctl restart etsy-auto-print"
+
+
+def test_a_poller_on_current_code_is_ok(tmp_path, monkeypatch):
+    active_service(monkeypatch)
+    result = checks.check_service(service_config(tmp_path, "0.1.0 (new1234)"))
+    assert result.state == checks.OK
+
+
+def test_a_poller_that_never_recorded_its_version_is_not_blamed(tmp_path, monkeypatch):
+    active_service(monkeypatch)
+    assert checks.check_service(service_config(tmp_path)).state == checks.OK

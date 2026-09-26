@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 
 import requests
 
+from .about import version_label
 from .auth import TokenStore
 from .config import REQUIRED_SCOPES, Config
 from . import stock
@@ -42,12 +43,20 @@ def _run(cmd: list[str], timeout: int = 10) -> tuple[int, str]:
         return 124, "timed out"
 
 
-def check_service(unit: str = "etsy-auto-print") -> Check:
+def check_service(config: Config | None = None, unit: str = "etsy-auto-print") -> Check:
     if not shutil.which("systemctl"):
         return Check("Background service", WARN, "systemctl not available on this host")
     code, out = _run(["systemctl", "is-active", unit])
     if out == "active":
         _, since = _run(["systemctl", "show", "-p", "ActiveEnterTimestamp", "--value", unit])
+        stale = _poller_is_stale(config)
+        if stale:
+            return Check(
+                "Background service", WARN,
+                f"running OLD code {stale} (since {since or 'unknown'}) — "
+                f"the code on disk is {version_label()}",
+                f"sudo systemctl restart {unit}",
+            )
         return Check("Background service", OK, f"running (since {since or 'unknown'})")
     if out == "inactive":
         return Check(
@@ -56,6 +65,24 @@ def check_service(unit: str = "etsy-auto-print") -> Check:
         )
     return Check("Background service", FAIL, f"state: {out or 'unknown'}",
                  f"journalctl -u {unit} -n 50")
+
+
+def _poller_is_stale(config: Config | None) -> str | None:
+    """The version the poller started on, if it differs from the code on disk.
+
+    `git pull` changes the files but not the process already running them:
+    the poller keeps the old behaviour until restarted, while `check` itself
+    (a fresh process) reports the new version — so both look up to date.
+    """
+    if config is None:
+        return None
+    try:
+        started = Store(config.db_path).get_meta("poller_version")
+    except Exception:
+        return None
+    if started and started != version_label():
+        return started
+    return None
 
 
 def check_etsy_api(config: Config) -> Check:
@@ -307,7 +334,7 @@ def check_stock(config: Config) -> Check:
 
 def run_all(config: Config) -> list[Check]:
     return [
-        check_service(),
+        check_service(config),
         check_etsy_api(config),
         check_etsy(config),
         check_etsy_scopes(config),

@@ -316,7 +316,14 @@ To have it always running, install it as its own service:
 ./systemd/install-service.sh dashboard
 ```
 
-**After a `git pull`, restart the dashboard too.** It is a separate
+**After a `git pull`, restart the poller.** `git pull` changes the files,
+not the process already running them: until `sudo systemctl restart
+etsy-auto-print`, orders are handled by the old code, while `check` (a fresh
+process) cheerfully reports the new version. `check` and the dashboard's
+status page now warn "running OLD code" when that happens, and the poller
+logs its version at startup (`journalctl -u etsy-auto-print | grep polling`).
+
+**Restart the dashboard too.** It is a separate
 long-lived process from the poller, so `systemctl restart etsy-auto-print`
 does not touch it — and the desktop launcher deliberately reuses a dashboard
 that is already running rather than starting a new one. The version in the

@@ -582,3 +582,43 @@ def test_a_later_ship_reads_in_hours(monkeypatch, capsys):
                           "expected_ship_date": placed + 26 * 3600}],
     }])
     assert "26 h after placed" in capsys.readouterr().out
+
+
+# -- the order's history says why Etsy was told when it was ------------------
+
+
+def posted_note(store, rid=12345):
+    return next(e["note"] for e in store.events(rid) if e["to_state"] == "tracking_posted")
+
+
+def test_the_history_says_the_ship_day_arrived(store, printer, receipt, monkeypatch):
+    store.register(receipt)
+    labeler = waiting_labeler(store, printer)
+    advance_order(receipt, store, printer, labeler, FakeEtsy())
+    frozen_at(monkeypatch, datetime.now().replace(hour=10) + timedelta(days=5))
+    advance_order(receipt, store, printer, labeler, FakeEtsy())
+    assert "9400TEST" in posted_note(store)
+    assert "ship day" in posted_note(store)
+
+
+def test_the_history_says_when_etsys_deadline_forced_it(store, printer, receipt):
+    receipt["transactions"][0]["expected_ship_date"] = int(datetime.now().timestamp())
+    store.register(receipt)
+    advance_order(receipt, store, printer, waiting_labeler(store, printer), FakeEtsy())
+    assert "Etsy's ship-by date" in posted_note(store)
+
+
+def test_the_history_says_immediately_was_configured(store, printer, receipt):
+    store.register(receipt)
+    labeler = make_labeler(store, printer, LiveFakeShippo(), mark_shipped="immediately")
+    advance_order(receipt, store, printer, labeler, FakeEtsy())
+    assert "mark_shipped = immediately" in posted_note(store)
+
+
+def test_due_reason_is_none_exactly_when_not_due():
+    printed = at(2026, 9, 25, 14)           # a Friday
+    for now in (datetime(2026, 9, 25, 15), datetime(2026, 9, 28, 7),
+                datetime(2026, 9, 28, 9), datetime(2026, 9, 30, 1)):
+        reason = shipdate.due_reason(now, printed, None, NEXT_BUSINESS_DAY, 8)
+        assert (reason is not None) == shipdate.tracking_due(
+            now, printed, None, NEXT_BUSINESS_DAY, 8)

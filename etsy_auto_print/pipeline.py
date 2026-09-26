@@ -230,12 +230,11 @@ def advance_order(
             hold(str(exc))
             return False
 
-    if (
-        etsy
-        and store.get(rid)["state"] == "label_printed"
-        and tracking_is_due(rid, receipt, store, labeler)
-    ):
-        result = post_tracking(rid, store, etsy)
+    reason = None
+    if etsy and store.get(rid)["state"] == "label_printed":
+        reason = tracking_due_reason(rid, receipt, store, labeler)
+    if reason is not None:
+        result = post_tracking(rid, store, etsy, reason)
         if result is True:
             moved = True
         elif isinstance(result, str):
@@ -293,16 +292,26 @@ def tracking_is_due(
     rid: int, receipt: dict, store: Store, labeler: Labeler | None,
     now: datetime | None = None,
 ) -> bool:
+    return tracking_due_reason(rid, receipt, store, labeler, now) is not None
+
+
+def tracking_due_reason(
+    rid: int, receipt: dict, store: Store, labeler: Labeler | None,
+    now: datetime | None = None,
+) -> str | None:
+    """Why Etsy should be told now, or None to keep waiting."""
     policy, hour = _ship_policy(labeler)
     label = store.get_label(rid)
     if label is None or not label["created_at"]:
-        return True        # post_tracking reports the missing label itself
+        return ""          # post_tracking reports the missing label itself
     now = now or datetime.now()
-    if shipdate.tracking_due(now, label["created_at"], receipt, policy, hour):
-        return True
+    reason = shipdate.due_reason(now, label["created_at"], receipt, policy, hour)
+    if reason is not None:
+        return reason
     if shipdate.waits_for_carrier(policy, receipt) and not label["is_test"]:
-        return carrier_has_it(rid, label, labeler.client, now)
-    return False
+        if carrier_has_it(rid, label, labeler.client, now):
+            return "USPS scanned it"
+    return None
 
 
 # Scans are checked at most this often per order. The poll runs every few
@@ -385,11 +394,14 @@ def shipment_extras(label, ship_on: date | None = None) -> dict:
     return extras
 
 
-def post_tracking(rid: int, store: Store, etsy: EtsyClient) -> bool | str | None:
+def post_tracking(
+    rid: int, store: Store, etsy: EtsyClient, reason: str = ""
+) -> bool | str | None:
     """Post a real label's tracking number to Etsy.
 
     Returns True on success, None when skipped (test label), or an error
-    string the caller should hold the order with.
+    string the caller should hold the order with. `reason` (why now) is
+    kept in the order's history next to the tracking number.
     """
     label = store.get_label(rid)
     if label is None:
@@ -420,9 +432,11 @@ def post_tracking(rid: int, store: Store, etsy: EtsyClient) -> bool | str | None
             etsy.create_receipt_shipment(rid, label["tracking_number"], carrier)
         except EtsyApiError as retry_exc:
             return f"tracking upload to Etsy failed: {retry_exc}"
-    store.transition(rid, "tracking_posted", f"{carrier} {label['tracking_number']}")
+    why = f" — {reason}" if reason else ""
+    store.transition(rid, "tracking_posted", f"{carrier} {label['tracking_number']}{why}")
     store.transition(rid, "done", "buyer notified by Etsy")
-    log.info("Order #%s: tracking posted (%s), order complete", rid, label["tracking_number"])
+    log.info("Order #%s: tracking posted (%s)%s, order complete",
+             rid, label["tracking_number"], why)
     return True
 
 

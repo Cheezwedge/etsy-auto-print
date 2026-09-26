@@ -27,7 +27,7 @@ from pathlib import Path
 from datetime import datetime
 
 from . import checks, stock
-from .about import version_label
+from .about import running_version, version_label
 from .auth import AuthError, TokenStore, authorize
 from .config import Config, ConfigError, load_config
 from .etsy import EtsyApiError, EtsyClient
@@ -130,6 +130,9 @@ def cmd_run(config, args) -> int:
     labeler = _build_labeler(config, store, printer)
     notifier = _build_notifier(config)
     watcher = StockWatcher(config.stock, store, notifier)
+    # Recorded so `check` can tell when a `git pull` hasn't been followed by
+    # a restart: the files are new, but this process still runs the old code.
+    store.set_meta("poller_version", running_version())
     notify_channels = ", ".join(
         c for c in (
             "ntfy" if config.ntfy_url else None,
@@ -137,11 +140,14 @@ def cmd_run(config, args) -> int:
         ) if c
     ) or "log only"
     logging.info(
-        "Polling every %ss (printer: %s, labels: %s, notify: %s). Ctrl-C to stop.",
+        "etsy-auto-print %s: polling every %ss (printer: %s, labels: %s, "
+        "notify: %s, mark shipped: %s). Ctrl-C to stop.",
+        running_version(),
         config.poll_interval,
         config.printer_backend,
         "on" if labeler else "off",
         notify_channels,
+        config.labels.mark_shipped if labeler else "n/a",
     )
     while True:
         try:
@@ -1069,7 +1075,7 @@ def cmd_mark_shipped(config, args) -> int:
         if row["state"] != "label_printed":
             print(f"#{rid}: {row['state']} — nothing to mark")
             continue
-        result = post_tracking(rid, store, client)
+        result = post_tracking(rid, store, client, "marked shipped by hand")
         if result is True:
             print(f"#{rid}: Etsy told it shipped today")
         elif result is None:

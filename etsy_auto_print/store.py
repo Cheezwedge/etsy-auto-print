@@ -77,6 +77,10 @@ CREATE TABLE IF NOT EXISTS listing_stock (
     level      TEXT NOT NULL DEFAULT '',
     updated_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
 
 # Everything save_label() writes, in column order. What was actually shipped
@@ -243,6 +247,18 @@ class Store:
         return self.conn.execute(
             "SELECT * FROM labels WHERE receipt_id = ?", (receipt_id,)
         ).fetchone()
+
+    # -- odds and ends ------------------------------------------------------
+
+    def set_meta(self, key: str, value: str) -> None:
+        self.conn.execute(
+            "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (key, value)
+        )
+        self.conn.commit()
+
+    def get_meta(self, key: str) -> str | None:
+        row = self.conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else None
 
     # -- listing stock ------------------------------------------------------
 
