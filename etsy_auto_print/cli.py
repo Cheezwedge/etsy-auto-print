@@ -12,6 +12,7 @@
     etsy-auto-print listings          check live listings against those SKUs
     etsy-auto-print test-order        one fake order, slip + label, end to end
     etsy-auto-print print-label FILE  print a label bought elsewhere
+    etsy-auto-print mark-shipped      tell Etsy printed orders shipped today
     etsy-auto-print refund ID         request postage back on an unused label
 """
 
@@ -40,7 +41,13 @@ from .labels import (
     required_service,
 )
 from .notify import Notifier
-from .pipeline import StockWatcher, advance_order, poll_once, reprint
+from .pipeline import (
+    StockWatcher,
+    advance_order,
+    poll_once,
+    post_tracking,
+    reprint,
+)
 from .pdf2zpl import PdfConvertError
 from .printer import FilePrinter, PrintError, get_printer, prepare_for_label_queue
 from .shippo import ShippoError, make_client
@@ -873,6 +880,70 @@ def cmd_services(config, args) -> int:
     return 0
 
 
+def _read_scans(stream) -> list[int]:
+    """Order numbers typed or scanned one per line, until a blank line.
+
+    A USB barcode scanner is a keyboard that types the pick slip's barcode —
+    the order number — and presses Enter, so scanning parcels at the door
+    needs nothing more than this.
+    """
+    print("Scan each parcel's pick slip (or type the order number). "
+          "Blank line to finish.")
+    ids = []
+    for line in stream:
+        line = line.strip()
+        if not line:
+            break
+        digits = "".join(ch for ch in line if ch.isdigit())
+        if not digits:
+            print(f"  {line!r} isn't an order number — skipped")
+            continue
+        ids.append(int(digits))
+        print(f"  #{digits}")
+    return ids
+
+
+def cmd_mark_shipped(config, args) -> int:
+    """Tell Etsy now, for parcels going out before their scheduled day.
+
+    By default Etsy hears on the next business day after the label prints,
+    because that's when a parcel usually reaches the post office. On days it
+    goes the same day, this skips the wait so the buyer's estimate is right.
+    """
+    client = _build_client(config)
+    store = Store(config.db_path)
+    if args.all:
+        ids = [row["receipt_id"] for row in store.in_state("label_printed")]
+    elif args.receipt_ids:
+        ids = args.receipt_ids
+    else:
+        ids = _read_scans(sys.stdin)
+
+    if not ids:
+        print("Nothing waiting to be marked shipped.")
+        return 0
+
+    failures = 0
+    for rid in ids:
+        row = store.get(rid)
+        if row is None:
+            print(f"#{rid}: not an order this program knows about")
+            failures += 1
+            continue
+        if row["state"] != "label_printed":
+            print(f"#{rid}: {row['state']} — nothing to mark")
+            continue
+        result = post_tracking(rid, store, client)
+        if result is True:
+            print(f"#{rid}: Etsy told it shipped today")
+        elif result is None:
+            print(f"#{rid}: test label — never sent to Etsy")
+        else:
+            print(f"#{rid}: {result}")
+            failures += 1
+    return 1 if failures else 0
+
+
 def cmd_refund(config, args) -> int:
     """Ask Shippo for the postage back on a label that will never be used.
 
@@ -1086,6 +1157,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.add_argument("receipt_id", type=int)
     p.set_defaults(func=cmd_clear_attempt)
+
+    p = sub.add_parser(
+        "mark-shipped",
+        help="tell Etsy a printed order shipped today, instead of next business day",
+    )
+    p.add_argument("receipt_ids", type=int, nargs="*",
+                   help="order numbers; omit to scan pick slips one per line")
+    p.add_argument("--all", action="store_true",
+                   help="every order that's printed and waiting")
+    p.set_defaults(func=cmd_mark_shipped)
 
     p = sub.add_parser(
         "refund", help="request postage back on an unused label (within 90 days)"

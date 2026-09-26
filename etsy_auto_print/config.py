@@ -88,6 +88,9 @@ class LabelConfig:
     service_map: dict  # normalized Etsy service name -> Shippo servicelevel token
     hold_unmapped_upgrade: bool
     validate_addresses: bool
+    # When Etsy is told the order shipped: see shipdate.py.
+    mark_shipped: str = "next_business_day"
+    mark_shipped_hour: int = 8
 
     @property
     def parcel(self) -> dict:
@@ -292,6 +295,17 @@ def _load_stock(section: dict) -> StockConfig:
 
 def _load_labels(raw: dict, base: Path) -> LabelConfig:
     section = raw.get("labels", {})
+
+    from .shipdate import POLICIES
+    mark_shipped = str(section.get("mark_shipped", "next_business_day"))
+    if mark_shipped not in POLICIES:
+        raise ConfigError(
+            f"labels.mark_shipped = {mark_shipped!r} — expected one of: "
+            f"{', '.join(POLICIES)}"
+        )
+    mark_shipped_hour = section.get("mark_shipped_hour", 8)
+    if not isinstance(mark_shipped_hour, int) or not 0 <= mark_shipped_hour <= 23:
+        raise ConfigError("labels.mark_shipped_hour must be a whole hour, 0-23")
     enabled = bool(section.get("enabled", False))
     token = section.get("shippo_token", "")
     ship_from = section.get("ship_from", {})
@@ -379,6 +393,8 @@ def _load_labels(raw: dict, base: Path) -> LabelConfig:
         },
         hold_unmapped_upgrade=bool(section.get("hold_unmapped_upgrade", True)),
         validate_addresses=bool(section.get("validate_addresses", True)),
+        mark_shipped=mark_shipped,
+        mark_shipped_hour=mark_shipped_hour,
     )
 
 

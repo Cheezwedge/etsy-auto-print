@@ -540,3 +540,68 @@ def test_a_refused_sudo_goes_back_to_the_page_instead_of_waiting(client, monkeyp
 def test_other_actions_still_redirect(client, monkeypatch):
     monkeypatch.setattr(dashboard, "_do_action", lambda *a: "done")
     assert client.post("/action/poll").status_code == 302
+
+
+# --- orders waiting to tell Etsy they shipped --------------------------------
+
+
+@pytest.fixture
+def waiting_order(app_dir):
+    from etsy_auto_print.store import Store
+
+    store = Store(app_dir / "orders.db")
+    store.register({"receipt_id": 555, "name": "A Buyer", "transactions": []})
+    for state in ("slip_printed", "label_purchased", "label_printed"):
+        store.transition(555, state, "")
+    store.save_label(555, object_id="t1", carrier="USPS", service="Ground Advantage",
+                     tracking_number="9400LIVE", is_test=False)
+    return 555
+
+
+def test_a_waiting_order_shows_when_etsy_will_hear(client, waiting_order):
+    text = client.get("/orders").get_data(as_text=True)
+    assert "Etsy told" in text
+    assert ">Shipped today<" in text
+
+
+def test_the_post_office_button_appears_when_anything_is_waiting(client, waiting_order):
+    text = client.get("/orders").get_data(as_text=True)
+    assert "Mark all shipped now" in text
+    assert "1 printed, waiting" in text
+
+
+def test_no_post_office_button_when_nothing_is_waiting(client):
+    assert "Mark all shipped now" not in client.get("/orders").get_data(as_text=True)
+
+
+def test_a_test_label_is_never_offered_as_shippable(client, app_dir, waiting_order):
+    # Test labels never reach Etsy, so a button to tell Etsy would be a lie.
+    import sqlite3
+
+    with sqlite3.connect(app_dir / "orders.db") as db:
+        db.execute("UPDATE labels SET is_test = 1")
+    assert ">Shipped today<" not in client.get("/orders").get_data(as_text=True)
+
+
+@pytest.mark.parametrize("form, expected", [
+    ({"receipt_id": "555"}, ["mark-shipped", "555"]),
+    ({"all": "1"}, ["mark-shipped", "--all"]),
+])
+def test_the_buttons_run_mark_shipped(client, monkeypatch, form, expected):
+    ran = []
+    monkeypatch.setattr(dashboard.checks, "_run",
+                        lambda cmd, timeout=10: (ran.append(cmd), (0, "ok"))[1])
+    client.post("/action/mark-shipped", data=form)
+    assert ran and ran[-1][-len(expected):] == expected
+
+
+def test_a_bad_order_number_is_refused(client, monkeypatch):
+    ran = []
+    monkeypatch.setattr(dashboard.checks, "_run",
+                        lambda cmd, timeout=10: (ran.append(cmd), (0, ""))[1])
+    resp = client.post("/action/mark-shipped", data={"receipt_id": "1; rm -rf /"},
+                       follow_redirects=True)
+    # The redirect back runs the page's own health checks; what matters is
+    # that the malformed id never reached a command line.
+    assert not [cmd for cmd in ran if "mark-shipped" in cmd]
+    assert "failed" in resp.get_data(as_text=True)

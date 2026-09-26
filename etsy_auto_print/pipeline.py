@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime
 
-from . import stock
+from . import shipdate, stock
 from .etsy import EtsyApiError, EtsyClient
 from .labels import LabelError, Labeler
 from .notify import Notifier
@@ -230,7 +230,11 @@ def advance_order(
             hold(str(exc))
             return False
 
-    if etsy and store.get(rid)["state"] == "label_printed":
+    if (
+        etsy
+        and store.get(rid)["state"] == "label_printed"
+        and tracking_is_due(rid, receipt, store, labeler)
+    ):
         result = post_tracking(rid, store, etsy)
         if result is True:
             moved = True
@@ -246,13 +250,56 @@ def advance_order(
     # landed in is where it rests: label_printed or done with labels on,
     # slip_printed for a slip-only shop. Anything held has already alerted.
     ended_in = store.get(rid)["state"]
+    waiting = ""
+    if ended_in == "label_printed" and ended_in != started_in:
+        day = scheduled_ship_day(rid, receipt, store, labeler)
+        if day is not None:
+            waiting = f"Etsy will be told it shipped on {day:%a %b %-d}."
+            log.info("Order #%s: tracking goes to Etsy on %s", rid, day.isoformat())
     if notifier and ended_in != started_in and ended_in != "held":
         notifier.send_order_ready(
             f"Etsy order #{rid} printed — ready to pack",
-            f"{receipt.get('name', '?')}\n{pack_list(receipt)}",
+            "\n".join(filter(None, [
+                receipt.get("name", "?"), pack_list(receipt), waiting,
+            ])),
         )
 
     return moved
+
+
+def _ship_policy(labeler: Labeler | None) -> tuple[str, int]:
+    if labeler is None:
+        return shipdate.IMMEDIATELY, 0
+    config = labeler.config
+    return (getattr(config, "mark_shipped", shipdate.IMMEDIATELY),
+            getattr(config, "mark_shipped_hour", 8))
+
+
+def scheduled_ship_day(
+    rid: int, receipt: dict, store: Store, labeler: Labeler | None
+) -> date | None:
+    """The day Etsy will be told, or None if it isn't waiting for a day.
+
+    Test labels never reach Etsy at all, so they have no ship day to report.
+    """
+    policy, _ = _ship_policy(labeler)
+    label = store.get_label(rid)
+    if policy == shipdate.IMMEDIATELY or label is None or label["is_test"]:
+        return None
+    return shipdate.ship_day(label["created_at"], receipt, policy)
+
+
+def tracking_is_due(
+    rid: int, receipt: dict, store: Store, labeler: Labeler | None,
+    now: datetime | None = None,
+) -> bool:
+    policy, hour = _ship_policy(labeler)
+    label = store.get_label(rid)
+    if label is None or not label["created_at"]:
+        return True        # post_tracking reports the missing label itself
+    return shipdate.tracking_due(
+        now or datetime.now(), label["created_at"], receipt, policy, hour
+    )
 
 
 def pack_list(receipt: dict) -> str:
@@ -271,7 +318,7 @@ def _num(value) -> float | None:
         return None
 
 
-def shipment_extras(label) -> dict:
+def shipment_extras(label, ship_on: date | None = None) -> dict:
     """The optional shipment details Etsy accepts, from the purchased label.
 
     Etsy uses these to give the buyer richer, faster tracking updates. Every
@@ -299,10 +346,10 @@ def shipment_extras(label) -> dict:
         extras["shipping_label_cost"] = cost
         extras["shipping_label_currency"] = label["currency"] or "USD"
 
-    if label["created_at"]:
-        extras["ship_date"] = datetime.fromtimestamp(
-            label["created_at"], tz=timezone.utc
-        ).strftime("%Y-%m-%d")
+    # The day Etsy is told, which is the day it actually ships — not the day
+    # the label was bought, and in local time: a UTC date is already
+    # tomorrow on a US evening.
+    extras["ship_date"] = (ship_on or date.today()).isoformat()
     return extras
 
 

@@ -1,7 +1,8 @@
 # etsy-auto-print
 
 Prints the packing slip and a prepaid shipping label for each new Etsy order,
-then marks the order shipped on Etsy with its tracking number. Runs unattended
+then marks the order shipped on Etsy with its tracking number — on the next
+business day by default, when the parcel is actually likely to be in the mail. Runs unattended
 on a Raspberry Pi next to a label printer. See [DESIGN.md](DESIGN.md) for how
 it works internally.
 
@@ -23,6 +24,16 @@ it works internally.
   waits for you to fix the cause and run `retry <id>`. That is the deliberate
   trade: an order that sits still is recoverable, an order shipped wrong is
   not.
+
+- **Etsy hears "shipped" the next business day, not when the label prints.**
+  Telling Etsy at print time sends the buyer a "shipped" email early and
+  starts Etsy's delivery estimate from a day the parcel was still on your
+  shelf. So tracking is uploaded the next business day (weekends and USPS
+  holidays skipped), never later than Etsy's ship-by date for the order.
+  Shipping same-day? Click **Shipped today** on the dashboard, **Mark all
+  shipped now** on a post-office run, or scan pick slips into
+  `etsy-auto-print mark-shipped`. Set `labels.mark_shipped = "immediately"`
+  for the old behaviour.
 
 Each step runs at most once per order, and a purchase *attempt* is recorded
 before money moves, so a crash mid-purchase holds the order rather than
@@ -144,6 +155,7 @@ etsy-auto-print services        # Shippo service tokens for [labels.service_map]
 etsy-auto-print poll            # orders now advance: slip -> label
 etsy-auto-print reprint-label 123
 etsy-auto-print retry 123       # re-run a held order after fixing the cause
+etsy-auto-print mark-shipped --all  # tell Etsy everything printed has shipped
 etsy-auto-print refund 123      # ask for the postage back on an unused label
 etsy-auto-print print-label FILE  # print a label bought elsewhere (e.g. Etsy)
 ```

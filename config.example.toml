@@ -97,6 +97,22 @@ allowed_providers = ["USPS"]
 # Set this to false to ship the cheapest rate and just log a warning instead.
 # hold_unmapped_upgrade = true
 
+# When Etsy is told the order shipped. The label always prints straight away;
+# this is about the tracking upload, which is what sends the buyer Etsy's
+# "shipped" email and starts Etsy's delivery estimate.
+#
+#   "next_business_day"  (default) — tell Etsy on the next business day after
+#                        the label prints, skipping weekends and USPS holidays,
+#                        from mark_shipped_hour local time. Matches a parcel
+#                        that goes to the post office the day after.
+#   "immediately"        — tell Etsy the moment the label prints.
+#
+# Never later than Etsy's own ship-by date for the order: a late
+# mark-as-shipped counts against your seller metrics. For a parcel that goes
+# out same-day, use "Shipped today" on the dashboard or `mark-shipped`.
+# mark_shipped = "next_business_day"
+# mark_shipped_hour = 8
+
 # Buyer addresses are checked with the carrier before postage is bought, and
 # an address that fails is HELD rather than shipped into the void. Carriers do
 # sometimes fail to recognise genuinely deliverable addresses (new builds,

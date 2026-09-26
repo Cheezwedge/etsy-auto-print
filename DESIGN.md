@@ -104,6 +104,16 @@ without opening ports).
   hour. Needs `listings_r`, which is an optional scope: without it, sold-out
   listings are invisible to the API and can only be inferred from a listing
   disappearing, so the alert says so rather than overclaiming.
+- **Ship date ≠ print date** ✅ — the label prints on arrival, but tracking
+  is posted to Etsy on the next business day (US federal holidays skipped,
+  from a configurable hour), since that's when a parcel typically reaches the
+  post office. Posting at print time sent the buyer "shipped" early and made
+  Etsy's delivery estimate optimistic by however long the parcel waited. The
+  wait is capped at Etsy's `expected_ship_date`, because a *late*
+  mark-as-shipped is what Etsy's seller metrics penalise. `ship_date` sent to
+  Etsy is the posting day in local time — it had been the label purchase date
+  in UTC, already tomorrow on a US evening. Same-day parcels skip the wait via
+  `mark-shipped`, which reads scanned pick-slip barcodes.
 - **Hold, don't guess** — address fails validation, no rate returned, printer
   offline, unmapped item: mark `held`, print nothing, send a notification.
   A `retry <receipt_id>` CLI command re-runs a held order after you fix it.

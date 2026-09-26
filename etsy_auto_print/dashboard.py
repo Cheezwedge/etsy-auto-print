@@ -235,6 +235,16 @@ STATUS = """
 ORDERS = """
 <div class="card">
   <h2>Orders <span class="pill">{{ rows|length }}</span></h2>
+  {% if waiting %}
+  <div class="row" style="margin:0 0 12px">
+    <span class="muted">{{ waiting }} printed, waiting to tell Etsy they shipped.
+      Heading to the post office?</span>
+    <form method="post" action="{{ url_for('action', name='mark-shipped') }}">
+      <input type="hidden" name="all" value="1">
+      <button class="primary">Mark all shipped now</button>
+    </form>
+  </div>
+  {% endif %}
   {% if not rows %}<p class="muted">No orders recorded yet.</p>{% else %}
   <div class="wrap"><table>
     <tr><th>Order</th><th>State</th><th>Buyer</th><th>Updated</th><th>Note</th><th></th></tr>
@@ -244,8 +254,14 @@ ORDERS = """
       <td class="state-{{ r.state }}">{{ r.state }}</td>
       <td>{{ r.buyer or '?' }}</td>
       <td class="muted">{{ r.updated }}</td>
-      <td class="muted">{{ r.error or '' }}</td>
+      <td class="muted">{{ r.error or r.ships or '' }}</td>
       <td>
+        {% if r.ships %}
+        <form method="post" action="{{ url_for('action', name='mark-shipped') }}">
+          <input type="hidden" name="receipt_id" value="{{ r.receipt_id }}">
+          <button>Shipped today</button>
+        </form>
+        {% endif %}
         {% if r.state == 'held' %}
         <form method="post" action="{{ url_for('action', name='retry') }}">
           <input type="hidden" name="receipt_id" value="{{ r.receipt_id }}">
@@ -471,20 +487,27 @@ def create_app(config_path: Path, password: str | None = None) -> Flask:
     @protected
     def orders():
         rows = []
+        waiting = 0
         try:
-            store = Store(cfg().db_path)
+            config = cfg()
+            store = Store(config.db_path)
             for r in store.all_orders():
+                ships = ""
+                if r["state"] == "label_printed":
+                    ships = _ship_note(store, r["receipt_id"], config)
+                    waiting += bool(ships)
                 rows.append({
                     "receipt_id": r["receipt_id"],
                     "state": r["state"],
                     "buyer": r["buyer_name"],
                     "updated": datetime.fromtimestamp(r["updated_at"]).strftime("%m-%d %H:%M"),
                     "error": r["error"],
+                    "ships": ships,
                 })
             rows.reverse()
         except Exception as exc:
             flash(f"Could not read orders: {exc}", "err")
-        return page(ORDERS, "Orders", "orders", rows=rows,
+        return page(ORDERS, "Orders", "orders", rows=rows, waiting=waiting,
                     max_upload_mb=MAX_UPLOAD_BYTES // (1024 * 1024),
                     output=session.pop("output", None))
 
@@ -919,6 +942,19 @@ def _restart_dashboard(delay: float = 0.0) -> str:
     )
 
 
+def _ship_note(store: Store, rid: int, config) -> str:
+    """"Etsy told Mon Sep 28" for an order waiting on its ship day, else ""."""
+    from .shipdate import IMMEDIATELY, ship_day
+
+    label = store.get_label(rid)
+    if (label is None or label["is_test"]
+            or config.labels.mark_shipped == IMMEDIATELY):
+        return ""
+    day = ship_day(label["created_at"], store.get_receipt_json(rid),
+                   config.labels.mark_shipped)
+    return f"Etsy told {day:%a %b %-d}"
+
+
 def _do_action(name: str, config_path: Path, form) -> str:
     """Run a dashboard action. Reuses the CLI so behavior can't drift."""
     exe = Path(os.sys.executable).parent / "etsy-auto-print"
@@ -941,6 +977,14 @@ def _do_action(name: str, config_path: Path, form) -> str:
         if not rid.isdigit():
             raise ValueError("bad receipt id")
         cmd = base + ["retry", rid]
+    elif name == "mark-shipped":
+        if form.get("all"):
+            cmd = base + ["mark-shipped", "--all"]
+        else:
+            rid = form.get("receipt_id", "").strip()
+            if not rid.isdigit():
+                raise ValueError("bad receipt id")
+            cmd = base + ["mark-shipped", rid]
     elif name in ("poll", "test-slip", "test-label", "test-notify"):
         cmd = base + [name]
     else:

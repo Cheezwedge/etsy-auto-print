@@ -38,6 +38,9 @@ def label_config(**overrides) -> LabelConfig:
         service_map=dict(DEFAULT_SERVICE_MAP),
         hold_unmapped_upgrade=True,
         validate_addresses=True,
+        # These tests are about how an order ships, not when Etsy hears about
+        # it; test_shipdate.py covers the default next-business-day wait.
+        mark_shipped="immediately",
     )
     defaults.update(overrides)
     return LabelConfig(**defaults)
