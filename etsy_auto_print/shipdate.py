@@ -19,7 +19,15 @@ from datetime import date, datetime, timedelta
 
 IMMEDIATELY = "immediately"
 NEXT_BUSINESS_DAY = "next_business_day"
-POLICIES = (IMMEDIATELY, NEXT_BUSINESS_DAY)
+# Wait for USPS to scan the parcel, but no later than Etsy's ship-by date.
+# An order with no readable ship-by date falls back to NEXT_BUSINESS_DAY:
+# waiting on a deadline it can't see could make the shop late.
+CARRIER_SCAN = "carrier_scan"
+POLICIES = (IMMEDIATELY, NEXT_BUSINESS_DAY, CARRIER_SCAN)
+
+# Shippo tracking statuses that mean the carrier physically has the parcel.
+# PRE_TRANSIT is only "label created"; UNKNOWN is nothing at all.
+CARRIER_HAS_IT = frozenset({"TRANSIT", "DELIVERED", "RETURNED", "FAILURE"})
 
 
 def _nth_weekday(year: int, month: int, weekday: int, n: int) -> date:
@@ -85,8 +93,11 @@ def ship_day(printed_at: float, receipt: dict | None, policy: str) -> date:
     printed_on = datetime.fromtimestamp(printed_at).date()
     if policy == IMMEDIATELY:
         return printed_on
-    planned = next_business_day(printed_on)
     deadline = etsy_ship_by(receipt)
+    if policy == CARRIER_SCAN and deadline is not None:
+        # The latest day. A USPS scan before then posts it sooner.
+        return max(deadline, printed_on)
+    planned = next_business_day(printed_on)
     # Etsy's ship-by date wins: marking shipped late costs seller metrics,
     # and an early estimate is the lesser problem.
     if deadline is not None and deadline < planned:
@@ -110,3 +121,16 @@ def tracking_due(
     # On the ship day itself, wait for a sensible hour so the buyer's
     # "shipped" email doesn't arrive at 00:03.
     return now.hour >= post_hour
+
+
+def waits_for_carrier(policy: str, receipt: dict | None) -> bool:
+    """Is this order waiting on a USPS scan, rather than a fixed day?"""
+    return policy == CARRIER_SCAN and etsy_ship_by(receipt) is not None
+
+
+def promise(policy: str, day: date, receipt: dict | None) -> str:
+    """What the shop is told about when Etsy will hear, in one sentence."""
+    if waits_for_carrier(policy, receipt):
+        return (f"Etsy will be told when USPS scans it, or on {day:%a %b %-d} "
+                "at the latest.")
+    return f"Etsy will be told it shipped on {day:%a %b %-d}."

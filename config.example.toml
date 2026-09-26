@@ -105,6 +105,11 @@ allowed_providers = ["USPS"]
 #                        the label prints, skipping weekends and USPS holidays,
 #                        from mark_shipped_hour local time. Matches a parcel
 #                        that goes to the post office the day after.
+#   "carrier_scan"       — tell Etsy the moment USPS scans the parcel, or on
+#                        Etsy's ship-by date if it hasn't been scanned by
+#                        then. Most accurate. An order with no readable
+#                        ship-by date falls back to next_business_day —
+#                        check yours with `etsy-auto-print ship-by` first.
 #   "immediately"        — tell Etsy the moment the label prints.
 #
 # Never later than Etsy's own ship-by date for the order: a late

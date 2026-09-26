@@ -990,14 +990,16 @@ def _restart_dashboard(delay: float = 0.0) -> str:
 
 def _ship_note(store: Store, rid: int, config) -> str:
     """"Etsy told Mon Sep 28" for an order waiting on its ship day, else ""."""
-    from .shipdate import IMMEDIATELY, ship_day
+    from .shipdate import IMMEDIATELY, ship_day, waits_for_carrier
 
     label = store.get_label(rid)
     if (label is None or label["is_test"]
             or config.labels.mark_shipped == IMMEDIATELY):
         return ""
-    day = ship_day(label["created_at"], store.get_receipt_json(rid),
-                   config.labels.mark_shipped)
+    receipt = store.get_receipt_json(rid)
+    day = ship_day(label["created_at"], receipt, config.labels.mark_shipped)
+    if waits_for_carrier(config.labels.mark_shipped, receipt):
+        return f"Etsy told on USPS scan, by {day:%a %b %-d}"
     return f"Etsy told {day:%a %b %-d}"
 
 

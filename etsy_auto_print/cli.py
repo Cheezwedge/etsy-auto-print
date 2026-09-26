@@ -645,6 +645,83 @@ def cmd_dashboard(config, args) -> int:
     return 0
 
 
+def cmd_ship_by(config, args) -> int:
+    """Show the ship-by date Etsy reports for recent orders.
+
+    Everything that waits before telling Etsy "shipped" is capped by this
+    date, so it has to actually be there. This reads what Etsy sends rather
+    than trusting the field name — and when it's missing, lists the
+    ship-related fields that *were* present, so a wrong name is obvious.
+    """
+    from .shipdate import etsy_ship_by
+
+    client = _build_client(config)
+    receipts = client.get_recent_receipts(limit=args.limit)
+    if not receipts:
+        print("No orders in this shop yet — nothing to check.")
+        return 0
+
+    missing = 0
+    for receipt in receipts:
+        rid = receipt.get("receipt_id", "?")
+        placed = receipt.get("created_timestamp") or receipt.get("create_timestamp")
+        placed = datetime.fromtimestamp(placed).strftime("%a %b %d") if placed else "?"
+        digital = all(t.get("is_digital") for t in receipt.get("transactions") or [{}])
+        deadline = etsy_ship_by(receipt)
+        if deadline:
+            print(f"  ok       #{rid}  placed {placed}  ship by {deadline:%a %b %d}")
+        elif digital:
+            print(f"  digital  #{rid}  placed {placed}  nothing to ship")
+        else:
+            missing += 1
+            seen = sorted({
+                key for txn in receipt.get("transactions") or []
+                for key in txn if "ship" in key.lower()
+            } | {key for key in receipt if "ship" in key.lower()})
+            print(f"  MISSING  #{rid}  placed {placed}  no ship-by date found")
+            print(f"           ship-related fields Etsy sent: {', '.join(seen) or 'none'}")
+
+    print()
+    if missing:
+        print(f"{missing} order(s) had no ship-by date. Anything that waits for "
+              "USPS falls back to the next business day for those — paste the "
+              "field list above so the right one can be read.")
+        return 1
+    print("Ship-by dates are readable. Safe to use mark_shipped = \"carrier_scan\".")
+    return 0
+
+
+def cmd_track(config, args) -> int:
+    """What Shippo says about a parcel right now — i.e. has USPS scanned it?
+
+    carrier_scan tells Etsy "shipped" the moment this reads TRANSIT or
+    later. Checking it on a real parcel is how to know that works, rather
+    than trusting that it does.
+    """
+    from .shipdate import CARRIER_HAS_IT
+
+    store = Store(config.db_path)
+    label = store.get_label(args.receipt_id)
+    if label is None:
+        print(f"No label recorded for order #{args.receipt_id}.", file=sys.stderr)
+        return 1
+    if label["is_test"]:
+        print("Test label — Shippo never updates tracking for those.")
+        return 0
+    client = make_client(config.labels.token, config.labels.allow_live)
+    try:
+        status = client.tracking_status(label["carrier"], label["tracking_number"])
+    except ShippoError as exc:
+        print(f"Couldn't ask Shippo: {exc}", file=sys.stderr)
+        return 1
+    scanned = status in CARRIER_HAS_IT
+    print(f"#{args.receipt_id}  {label['carrier']} {label['tracking_number']}")
+    print(f"Shippo status: {status}")
+    print("USPS has it — carrier_scan would tell Etsy now." if scanned else
+          "Not scanned yet — carrier_scan keeps waiting (up to the ship-by date).")
+    return 0
+
+
 def cmd_dump_receipt(config, args) -> int:
     """Print the raw JSON Etsy returns for a receipt (for inspection/debugging)."""
     import json
@@ -1157,6 +1234,17 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.add_argument("receipt_id", type=int)
     p.set_defaults(func=cmd_clear_attempt)
+
+    p = sub.add_parser("track", help="has USPS scanned this order's parcel yet?")
+    p.add_argument("receipt_id", type=int)
+    p.set_defaults(func=cmd_track)
+
+    p = sub.add_parser(
+        "ship-by", help="check Etsy's ship-by date is readable on recent orders"
+    )
+    p.add_argument("--limit", type=int, default=10,
+                   help="how many recent orders to check (default 10)")
+    p.set_defaults(func=cmd_ship_by)
 
     p = sub.add_parser(
         "mark-shipped",

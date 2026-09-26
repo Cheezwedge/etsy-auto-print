@@ -254,8 +254,8 @@ def advance_order(
     if ended_in == "label_printed" and ended_in != started_in:
         day = scheduled_ship_day(rid, receipt, store, labeler)
         if day is not None:
-            waiting = f"Etsy will be told it shipped on {day:%a %b %-d}."
-            log.info("Order #%s: tracking goes to Etsy on %s", rid, day.isoformat())
+            waiting = shipdate.promise(_ship_policy(labeler)[0], day, receipt)
+            log.info("Order #%s: %s", rid, waiting)
     if notifier and ended_in != started_in and ended_in != "held":
         notifier.send_order_ready(
             f"Etsy order #{rid} printed — ready to pack",
@@ -297,9 +297,41 @@ def tracking_is_due(
     label = store.get_label(rid)
     if label is None or not label["created_at"]:
         return True        # post_tracking reports the missing label itself
-    return shipdate.tracking_due(
-        now or datetime.now(), label["created_at"], receipt, policy, hour
-    )
+    now = now or datetime.now()
+    if shipdate.tracking_due(now, label["created_at"], receipt, policy, hour):
+        return True
+    if shipdate.waits_for_carrier(policy, receipt) and not label["is_test"]:
+        return carrier_has_it(rid, label, labeler.client, now)
+    return False
+
+
+# Scans are checked at most this often per order. The poll runs every few
+# minutes; USPS doesn't move that fast, and Shippo rate-limits tracking.
+SCAN_CHECK_SECONDS = 30 * 60
+_last_scan_check: dict[int, float] = {}
+
+
+def carrier_has_it(rid: int, label, shippo, now: datetime) -> bool:
+    """Has USPS scanned this parcel yet?
+
+    A failure to ask counts as "not yet": the ship-by date still guarantees
+    Etsy hears in time, so a Shippo outage can delay the message but can
+    never make the shop late.
+    """
+    last = _last_scan_check.get(rid)
+    if last is not None and now.timestamp() - last < SCAN_CHECK_SECONDS:
+        return False
+    _last_scan_check[rid] = now.timestamp()
+    try:
+        status = shippo.tracking_status(label["carrier"], label["tracking_number"])
+    except Exception as exc:          # ShippoError, or anything unexpected
+        log.warning("Order #%s: couldn't check the USPS scan (%s)", rid, exc)
+        return False
+    if status in shipdate.CARRIER_HAS_IT:
+        log.info("Order #%s: USPS has it (%s) — telling Etsy", rid, status)
+        _last_scan_check.pop(rid, None)
+        return True
+    return False
 
 
 def pack_list(receipt: dict) -> str:

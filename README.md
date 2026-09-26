@@ -32,8 +32,10 @@ it works internally.
   holidays skipped), never later than Etsy's ship-by date for the order.
   Shipping same-day? Click **Shipped today** on the dashboard, **Mark all
   shipped now** on a post-office run, or scan pick slips into
-  `etsy-auto-print mark-shipped`. Set `labels.mark_shipped = "immediately"`
-  for the old behaviour.
+  `etsy-auto-print mark-shipped`. Or set `labels.mark_shipped =
+  "carrier_scan"` to tell Etsy the moment USPS scans the parcel, with the
+  ship-by date as the backstop — run `etsy-auto-print ship-by` first to
+  confirm your orders carry one. `"immediately"` is the old behaviour.
 
 Each step runs at most once per order, and a purchase *attempt* is recorded
 before money moves, so a crash mid-purchase holds the order rather than
@@ -156,6 +158,8 @@ etsy-auto-print poll            # orders now advance: slip -> label
 etsy-auto-print reprint-label 123
 etsy-auto-print retry 123       # re-run a held order after fixing the cause
 etsy-auto-print mark-shipped --all  # tell Etsy everything printed has shipped
+etsy-auto-print ship-by         # is Etsy's ship-by date readable on your orders?
+etsy-auto-print track 123       # has USPS scanned this parcel yet?
 etsy-auto-print refund 123      # ask for the postage back on an unused label
 etsy-auto-print print-label FILE  # print a label bought elsewhere (e.g. Etsy)
 ```

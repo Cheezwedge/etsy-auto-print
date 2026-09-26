@@ -264,8 +264,10 @@ def test_bad_settings_are_rejected(tmp_path, line, message):
         load_config(cfg)
 
 
-def test_shipdate_module_names_both_policies():
-    assert set(shipdate.POLICIES) == {IMMEDIATELY, NEXT_BUSINESS_DAY}
+def test_shipdate_module_names_every_policy():
+    assert set(shipdate.POLICIES) == {
+        IMMEDIATELY, NEXT_BUSINESS_DAY, shipdate.CARRIER_SCAN,
+    }
 
 
 # --- shipping same-day: mark-shipped ------------------------------------------
@@ -344,3 +346,179 @@ def test_an_etsy_failure_is_reported_and_the_order_stays_waiting(
 def test_nothing_waiting_says_so(store, monkeypatch, capsys):
     assert run_mark(monkeypatch, store, FakeEtsy(), all_=True) == 0
     assert "Nothing waiting" in capsys.readouterr().out
+
+
+# --- carrier_scan: wait for USPS, but never past Etsy's ship-by date --------
+
+from etsy_auto_print.shipdate import CARRIER_SCAN, promise, waits_for_carrier  # noqa: E402
+
+
+def test_with_a_ship_by_date_the_latest_day_is_that_date():
+    assert ship_day(at(2026, 9, 25), receipt_due(2026, 9, 30), CARRIER_SCAN) \
+        == date(2026, 9, 30)
+
+
+def test_without_a_ship_by_date_it_behaves_like_next_business_day():
+    # Waiting on a deadline it can't see is exactly how a shop ends up late.
+    assert ship_day(at(2026, 9, 25), None, CARRIER_SCAN) == date(2026, 9, 28)
+    assert not waits_for_carrier(CARRIER_SCAN, None)
+
+
+def test_the_deadline_day_posts_even_with_no_scan():
+    now = datetime(2026, 9, 30, 0, 5)
+    assert tracking_due(now, at(2026, 9, 25), receipt_due(2026, 9, 30),
+                        CARRIER_SCAN, 8)
+
+
+def test_before_the_deadline_the_date_alone_does_not_post():
+    now = datetime(2026, 9, 28, 15)
+    assert not tracking_due(now, at(2026, 9, 25), receipt_due(2026, 9, 30),
+                            CARRIER_SCAN, 8)
+
+
+def test_the_promise_says_what_will_actually_happen():
+    assert "when USPS scans it" in promise(CARRIER_SCAN, date(2026, 9, 30),
+                                           receipt_due(2026, 9, 30))
+    # No deadline means no scan-waiting, so it mustn't claim otherwise.
+    assert "when USPS scans" not in promise(CARRIER_SCAN, date(2026, 9, 28), None)
+
+
+class TrackingShippo(LiveFakeShippo):
+    def __init__(self, status="PRE_TRANSIT", fail=False):
+        super().__init__()
+        self.status = status
+        self.fail = fail
+        self.asked = 0
+
+    def tracking_status(self, carrier, number):
+        self.asked += 1
+        if self.fail:
+            from etsy_auto_print.shippo import ShippoError
+            raise ShippoError("could not reach Shippo")
+        return self.status
+
+
+@pytest.fixture(autouse=True)
+def fresh_scan_throttle(monkeypatch):
+    monkeypatch.setattr(pipeline, "_last_scan_check", {})
+
+
+def scanning(store, printer, receipt, shippo, deadline_days=5):
+    receipt["transactions"][0]["expected_ship_date"] = int(
+        (datetime.now() + timedelta(days=deadline_days)).timestamp())
+    store.register(receipt)
+    labeler = make_labeler(store, printer, shippo, mark_shipped=CARRIER_SCAN)
+    return labeler
+
+
+def test_a_usps_scan_tells_etsy_straight_away(store, printer, receipt):
+    shippo = TrackingShippo(status="TRANSIT")
+    labeler = scanning(store, printer, receipt, shippo)
+    etsy = FakeEtsy()
+    advance_order(receipt, store, printer, labeler, etsy)
+    assert store.get(12345)["state"] == "done"
+    assert etsy.shipments == [(12345, "9400TEST", "usps")]
+
+
+def test_label_created_is_not_a_scan(store, printer, receipt):
+    shippo = TrackingShippo(status="PRE_TRANSIT")
+    labeler = scanning(store, printer, receipt, shippo)
+    etsy = FakeEtsy()
+    advance_order(receipt, store, printer, labeler, etsy)
+    assert store.get(12345)["state"] == "label_printed"
+    assert etsy.shipments == []
+
+
+def test_no_scan_by_the_ship_by_date_posts_anyway(store, printer, receipt, monkeypatch):
+    shippo = TrackingShippo(status="PRE_TRANSIT")
+    labeler = scanning(store, printer, receipt, shippo, deadline_days=2)
+    etsy = FakeEtsy()
+    advance_order(receipt, store, printer, labeler, etsy)
+    frozen_at(monkeypatch, datetime.now() + timedelta(days=2))
+    advance_order(receipt, store, printer, labeler, etsy)
+    assert store.get(12345)["state"] == "done"
+
+
+def test_a_shippo_outage_delays_but_never_makes_the_shop_late(
+    store, printer, receipt, monkeypatch
+):
+    shippo = TrackingShippo(fail=True)
+    labeler = scanning(store, printer, receipt, shippo, deadline_days=2)
+    etsy = FakeEtsy()
+    advance_order(receipt, store, printer, labeler, etsy)
+    assert store.get(12345)["state"] == "label_printed"     # not held
+    frozen_at(monkeypatch, datetime.now() + timedelta(days=2))
+    advance_order(receipt, store, printer, labeler, etsy)
+    assert store.get(12345)["state"] == "done"
+
+
+def test_usps_is_not_asked_on_every_poll(store, printer, receipt):
+    shippo = TrackingShippo(status="PRE_TRANSIT")
+    labeler = scanning(store, printer, receipt, shippo)
+    etsy = FakeEtsy()
+    for _ in range(5):
+        advance_order(receipt, store, printer, labeler, etsy)
+    assert shippo.asked == 1
+
+
+def test_an_order_without_a_ship_by_date_never_waits_on_usps(store, printer, receipt):
+    shippo = TrackingShippo(status="TRANSIT")
+    store.register(receipt)                       # no expected_ship_date
+    labeler = make_labeler(store, printer, shippo, mark_shipped=CARRIER_SCAN)
+    advance_order(receipt, store, printer, labeler, FakeEtsy())
+    assert shippo.asked == 0
+    assert store.get(12345)["state"] == "label_printed"   # next business day
+
+
+# --- the ship-by check command -------------------------------------------------
+
+
+def run_ship_by(monkeypatch, receipts):
+    monkeypatch.setattr(cli, "_build_client", lambda cfg: type(
+        "C", (), {"get_recent_receipts": lambda self, limit: receipts})())
+    return cli.cmd_ship_by(None, argparse.Namespace(limit=10))
+
+
+def test_ship_by_reports_readable_dates(monkeypatch, capsys):
+    code = run_ship_by(monkeypatch, [{
+        "receipt_id": 1, "created_timestamp": int(at(2026, 9, 25)),
+        "transactions": [{"expected_ship_date": int(at(2026, 9, 28))}],
+    }])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "ship by Mon Sep 28" in out
+    assert "carrier_scan" in out
+
+
+def test_ship_by_names_the_fields_etsy_did_send(monkeypatch, capsys):
+    # If the field has another name, this is what makes that obvious rather
+    # than silently disabling the deadline.
+    code = run_ship_by(monkeypatch, [{
+        "receipt_id": 2, "created_timestamp": int(at(2026, 9, 25)),
+        "transactions": [{"ship_by_timestamp": 1, "shipping_method": "x"}],
+    }])
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "MISSING" in out
+    assert "ship_by_timestamp" in out and "shipping_method" in out
+
+
+def test_ship_by_does_not_flag_digital_orders(monkeypatch, capsys):
+    code = run_ship_by(monkeypatch, [{
+        "receipt_id": 3, "transactions": [{"is_digital": True}],
+    }])
+    assert code == 0
+    assert "nothing to ship" in capsys.readouterr().out
+
+
+def test_track_reports_a_scan(store, printer, receipt, monkeypatch, capsys):
+    labeler = scanning(store, printer, receipt, TrackingShippo(status="TRANSIT"))
+    advance_order(receipt, store, printer, labeler, None)     # print, no Etsy
+    monkeypatch.setattr(cli, "Store", lambda path: store)
+    monkeypatch.setattr(cli, "make_client",
+                        lambda token, allow_live: TrackingShippo(status="TRANSIT"))
+    config = type("C", (), {"db_path": None, "labels": type(
+        "L", (), {"token": "t", "allow_live": True})()})()
+    assert cli.cmd_track(config, argparse.Namespace(receipt_id=12345)) == 0
+    out = capsys.readouterr().out
+    assert "Shippo status: TRANSIT" in out and "USPS has it" in out

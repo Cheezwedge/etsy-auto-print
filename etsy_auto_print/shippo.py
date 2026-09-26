@@ -105,6 +105,16 @@ class ShippoClient:
             {"transaction": transaction_object_id, "async": False},
         )
 
+    def tracking_status(self, carrier: str, tracking_number: str) -> str:
+        """Shippo's current status for a parcel, e.g. PRE_TRANSIT or TRANSIT."""
+        from urllib.parse import quote
+
+        data = self._request(
+            "GET", f"/tracks/{quote(carrier.lower())}/{quote(tracking_number)}"
+        )
+        status = (data.get("tracking_status") or {}).get("status") or "UNKNOWN"
+        return str(status).upper()
+
     def download(self, url: str) -> bytes:
         try:
             resp = requests.get(url, timeout=60)
