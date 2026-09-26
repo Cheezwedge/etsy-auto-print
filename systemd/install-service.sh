@@ -89,11 +89,41 @@ fi
 printf '%s\n' "$UNIT" | sudo tee "$TARGET" >/dev/null
 sudo chmod 644 "$TARGET"
 sudo systemctl daemon-reload
-sudo systemctl enable --now "$NAME"
+
+# Let the dashboard's two restart buttons work without a password. sudo
+# matches command lines exactly, so each rule is the literal command the
+# dashboard runs — nothing broader. Checked with visudo before installing:
+# a malformed sudoers file can lock you out of sudo entirely.
+SYSTEMCTL="$(command -v systemctl)"
+SUDOERS=/etc/sudoers.d/etsy-auto-print
+RULE="$RUN_USER ALL=(root) NOPASSWD: $SYSTEMCTL restart etsy-auto-print, $SYSTEMCTL restart --no-block etsy-auto-print-dashboard"
+RULE_FILE="$(mktemp)"
+printf '%s\n' "$RULE" > "$RULE_FILE"
+if sudo visudo -cf "$RULE_FILE" >/dev/null; then
+    sudo install -m 0440 -o root -g root "$RULE_FILE" "$SUDOERS"
+    SUDO_NOTE="restart buttons allowed without a password ($SUDOERS)"
+else
+    SUDO_NOTE="could NOT install the sudoers rule — restart buttons will ask you to run it by hand"
+fi
+rm -f "$RULE_FILE"
+
+# A dashboard started by the desktop launcher holds port 8765, which stops
+# the service from starting at all. Say so rather than leave it crash-looping.
+if [ "$COMMAND" = "dashboard" ] && pgrep -u "$RUN_USER" -f "etsy-auto-print dashboard" >/dev/null \
+        && ! systemctl is-active --quiet "$NAME"; then
+    echo "Note: a dashboard is already running outside the service (probably the"
+    echo "desktop launcher). Stopping it so the service can take port 8765."
+    pkill -u "$RUN_USER" -f "etsy-auto-print dashboard" || true
+    sleep 1
+fi
+
+sudo systemctl enable "$NAME"
+sudo systemctl restart "$NAME"
 
 echo
 echo "Installed $TARGET"
 echo "  user:    $RUN_USER"
 echo "  command: $BINARY $COMMAND"
+echo "  sudo:    $SUDO_NOTE"
 echo
 sudo systemctl status "$NAME" --no-pager | head -5

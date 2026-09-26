@@ -397,20 +397,29 @@ yourself sidesteps both and shows the error directly:
 ~/.local/bin/etsy-dashboard YOURUSER@YOURPI
 ```
 
-### Let the dashboard restart the service
+### Let the dashboard restart things
 
-The **Save & apply** and **Restart service** buttons run `systemctl restart`,
-which normally needs a password. Grant just that one command:
+**Save & apply**, **Restart poller** and **Restart dashboard** run
+`systemctl restart`, which normally needs a password. The service installer
+grants exactly those two restarts and nothing else:
 
 ```bash
-echo "$USER ALL=(root) NOPASSWD: /bin/systemctl restart etsy-auto-print" \
-  | sudo tee /etc/sudoers.d/etsy-auto-print
-sudo chmod 0440 /etc/sudoers.d/etsy-auto-print
+./systemd/install-service.sh            # the poller
+./systemd/install-service.sh dashboard  # the dashboard, as a service
 ```
 
-This permits exactly one command and nothing else. Without it the buttons
-still save your changes — they just report that you need to run
-`sudo systemctl restart etsy-auto-print` yourself.
+It writes `/etc/sudoers.d/etsy-auto-print`, checked with `visudo` first. sudo
+matches command lines word for word, so the rule names the literal commands
+the dashboard runs — an older hand-written rule that only allowed
+`restart etsy-auto-print` let the poller button work and silently blocked the
+dashboard one.
+
+**Restart dashboard only works when the dashboard runs as that service.** A
+dashboard started by the desktop launcher is a separate copy: restarting the
+service wouldn't touch it, and it holds port 8765 so the service copy can't
+start at all. The button says so rather than pretending. The installer stops
+a launcher-started copy for you; after that the launcher simply reuses the
+service.
 
 ## After you change settings — what to check
 

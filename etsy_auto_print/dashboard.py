@@ -417,6 +417,10 @@ def create_app(config_path: Path, password: str | None = None) -> Flask:
     def page(template, title, name, **kw):
         # Markup(): the inner template's output is already-rendered HTML, so it
         # must not be escaped again when it lands in BASE's {{ body }}.
+        failure = take_restart_failure()
+        if failure:
+            flash(f"Restart dashboard failed after the page was sent: {failure}. "
+                  f"This is still the old build.", "err")
         body = Markup(render_template_string(template, **kw))
         # version_label() re-reads git on every call, so it reflects the code
         # on disk right now; running_version() is what this process loaded at
@@ -894,40 +898,82 @@ should change once it comes back.</p>
 """
 
 
+# Exactly what sudo is asked to run. The sudoers rule that allows it has to
+# name this same command line, word for word — sudo matches exactly.
+RESTART_DASHBOARD = ["systemctl", "restart", "--no-block", DASHBOARD_UNIT]
+
+# Set by the deferred restart if it fails. By then the response has gone, so
+# the only way to tell anyone is on the next page load — which, since the
+# restart failed, is served by this same process.
+_restart_failure: str | None = None
+
+
+def take_restart_failure() -> str | None:
+    global _restart_failure
+    failure, _restart_failure = _restart_failure, None
+    return failure
+
+
+def _dashboard_service_pid() -> int | None:
+    code, out = checks._run(
+        ["systemctl", "show", "-p", "MainPID", "--value", DASHBOARD_UNIT]
+    )
+    out = out.strip()
+    return int(out) if code == 0 and out.isdigit() and int(out) > 0 else None
+
+
 def _restart_dashboard(delay: float = 0.0) -> str:
     """Restart the process serving this page.
 
     The poller and the dashboard are separate long-lived processes, so a
-    `git pull` plus "Restart poller" leaves this page on the old build —
-    which reads as a fix that didn't work, since the stale banner is still
-    there afterwards.
+    `git pull` plus "Restart poller" leaves this page on the old build.
 
-    --no-block matters: without it systemctl waits for the stop, and the
-    stop kills the very process that has to write this response, so the
-    browser gets a dropped connection instead of a confirmation.
+    Everything that could stop the restart is checked before anything is
+    promised, because a "Restarting…" page that comes back unchanged looks
+    exactly like a restart that worked and a fix that didn't.
     """
     if checks._run(["systemctl", "cat", DASHBOARD_UNIT])[0] != 0:
         raise RuntimeError(
-            f"the dashboard isn't running as a service, so it can't restart "
-            f"itself safely — nothing would start it again. Install it as one "
-            f"with ./systemd/install-service.sh dashboard, or restart it the "
-            f"way you started it (close the launcher window and reopen it)."
+            "the dashboard isn't installed as a service, so nothing would "
+            "start it again after stopping it. Install it with "
+            "./systemd/install-service.sh dashboard — or close the launcher "
+            "window and reopen it."
         )
-    command = ["sudo", "-n", "systemctl", "restart", "--no-block", DASHBOARD_UNIT]
 
-    # Check sudo is actually permitted before promising a restart, otherwise
-    # the browser sits on a waiting page for a restart that never happens.
-    code, out = checks._run(["sudo", "-n", "systemctl", "is-active", DASHBOARD_UNIT])
-    if code != 0 and "password" in out.lower():
+    # The service restarting is no use if this page isn't the service. The
+    # desktop launcher starts its own copy, which also holds port 8765 — so
+    # the service copy can't even start while it runs.
+    service_pid = _dashboard_service_pid()
+    if service_pid != os.getpid():
+        state = ("isn't running — probably because this copy holds its port"
+                 if service_pid is None else f"is a different process ({service_pid})")
         raise RuntimeError(
-            f"{out} — run manually: sudo systemctl restart {DASHBOARD_UNIT}"
+            f"this page is served by a dashboard started outside the service "
+            f"(pid {os.getpid()}, most likely by the desktop launcher), and the "
+            f"{DASHBOARD_UNIT} service {state}. Restarting the service wouldn't "
+            f"touch this page. Close the launcher window and reopen it."
         )
 
+    # Ask sudo about the exact command, without running it or prompting.
+    code, _ = checks._run(["sudo", "-n", "-l", *RESTART_DASHBOARD])
+    if code != 0:
+        raise RuntimeError(
+            "sudo won't run the restart without a password. Allow it with "
+            "./systemd/install-service.sh dashboard — or run it by hand: "
+            f"sudo systemctl restart {DASHBOARD_UNIT}"
+        )
+
+    command = ["sudo", "-n", *RESTART_DASHBOARD]
     if delay:
-        # Fire after the response has been written. --no-block alone only
-        # stops systemctl waiting; systemd can still stop this process
-        # mid-response, which is what leaves the browser on a dead page.
-        threading.Timer(delay, lambda: checks._run(command, timeout=30)).start()
+        # Fire after the response has been written: --no-block only stops
+        # systemctl waiting; systemd can still stop this process mid-response.
+        def fire():
+            global _restart_failure
+            code, out = checks._run(command, timeout=30)
+            if code != 0:
+                _restart_failure = out or f"systemctl exited {code}"
+
+        threading.Timer(delay, fire).start()
         return f"Restarting {DASHBOARD_UNIT}…"
 
     code, out = checks._run(command, timeout=30)

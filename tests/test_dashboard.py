@@ -442,99 +442,152 @@ def test_both_restarts_are_offered_and_named_apart(client):
     assert ">Restart dashboard<" in text
 
 
-def test_restarting_the_dashboard_uses_no_block(monkeypatch):
-    # Without --no-block, systemctl waits for the stop — and the stop kills
-    # the process that still has to write the HTTP response.
-    calls = []
+class FakeSystemd:
+    """Answers the questions the restart asks, one scenario per instance."""
 
-    def fake_run(cmd, timeout=10):
-        calls.append(cmd)
+    def __init__(self, installed=True, service_pid="self", sudo_ok=True,
+                 restart_ok=True):
+        import os
+        self.installed = installed
+        self.pid = str(os.getpid()) if service_pid == "self" else str(service_pid)
+        self.sudo_ok = sudo_ok
+        self.restart_ok = restart_ok
+        self.ran = []
+
+    def __call__(self, cmd, timeout=10):
+        self.ran.append(cmd)
+        if cmd[:2] == ["systemctl", "cat"]:
+            return (0, "[Unit]") if self.installed else (1, "No files found")
+        if cmd[:2] == ["systemctl", "show"]:
+            return (0, self.pid)
+        if cmd[:3] == ["sudo", "-n", "-l"]:
+            return (0, "/usr/bin/systemctl") if self.sudo_ok else \
+                (1, "sudo: a password is required")
+        if cmd[:2] == ["sudo", "-n"]:
+            return (0, "") if self.restart_ok else (1, "Failed to restart unit")
         return (0, "")
 
-    monkeypatch.setattr(dashboard.checks, "_run", fake_run)
-    out = dashboard._restart_dashboard()
-    assert "--no-block" in calls[-1]
-    assert dashboard.DASHBOARD_UNIT in calls[-1]
-    assert "reload this page" in out
-
-
-def test_it_refuses_when_there_is_no_dashboard_service(monkeypatch):
-    # Killing a dashboard nothing would restart leaves the user with no
-    # dashboard at all, which is worse than the stale banner.
-    monkeypatch.setattr(
-        dashboard.checks, "_run",
-        lambda cmd, timeout=10: (1, "No files found for etsy-auto-print-dashboard.service"),
-    )
-    with pytest.raises(RuntimeError, match="install-service.sh dashboard"):
-        dashboard._restart_dashboard()
-
-
-def test_a_denied_sudo_says_what_to_run(monkeypatch):
-    def fake_run(cmd, timeout=10):
-        return (0, "") if cmd[0] == "systemctl" else (1, "sudo: a password is required")
-
-    monkeypatch.setattr(dashboard.checks, "_run", fake_run)
-    with pytest.raises(RuntimeError, match="sudo systemctl restart"):
-        dashboard._restart_dashboard()
-
-
-# --- restarting the dashboard from inside the dashboard ---------------------
+    def restarts(self):
+        return [c for c in self.ran if c[:2] == ["sudo", "-n"] and "-l" not in c]
 
 
 @pytest.fixture
-def fake_restart(monkeypatch):
-    """systemctl calls captured, and the deferred restart never really fires."""
-    timers = []
+def systemd(monkeypatch):
+    fake = FakeSystemd()
+    monkeypatch.setattr(dashboard.checks, "_run", fake)
+    return fake
+
+
+@pytest.fixture
+def timers(monkeypatch):
+    """The deferred restart, captured instead of fired."""
+    captured = []
 
     class FakeTimer:
         def __init__(self, delay, fn):
             self.delay, self.fn = delay, fn
-            timers.append(self)
+            captured.append(self)
 
         def start(self):
             pass
 
     monkeypatch.setattr(dashboard.threading, "Timer", FakeTimer)
-    monkeypatch.setattr(dashboard.checks, "_run", lambda cmd, timeout=10: (0, ""))
-    return timers
+    return captured
 
 
-def test_it_answers_with_a_waiting_page_not_a_redirect(client, fake_restart):
-    # Redirecting is wrong here: the action kills the server that would serve
-    # the redirect, so the browser lands on a connection error at the POST
-    # URL and the user has to navigate back by hand.
+def test_the_restart_uses_no_block(systemd):
+    out = dashboard._restart_dashboard()
+    (command,) = systemd.restarts()
+    assert command[2:] == dashboard.RESTART_DASHBOARD
+    assert "--no-block" in command
+    assert "reload this page" in out
+
+
+def test_sudo_is_asked_about_the_exact_command_it_will_run(systemd):
+    # The old check asked about `systemctl is-active` and then ran
+    # `systemctl restart` — sudo matches command lines exactly, so a yes to
+    # one said nothing about the other.
+    dashboard._restart_dashboard()
+    checked = [c for c in systemd.ran if c[:3] == ["sudo", "-n", "-l"]]
+    assert checked == [["sudo", "-n", "-l", *dashboard.RESTART_DASHBOARD]]
+
+
+def test_it_refuses_when_there_is_no_dashboard_service(monkeypatch):
+    # Stopping something nothing will restart leaves no dashboard at all.
+    fake = FakeSystemd(installed=False)
+    monkeypatch.setattr(dashboard.checks, "_run", fake)
+    with pytest.raises(RuntimeError, match="install-service.sh dashboard"):
+        dashboard._restart_dashboard()
+    assert fake.restarts() == []
+
+
+def test_it_refuses_when_this_page_is_not_the_service(monkeypatch):
+    # The desktop launcher starts its own copy. Restarting the service then
+    # leaves this page exactly as it was — and they fight over the port.
+    fake = FakeSystemd(service_pid=1)
+    monkeypatch.setattr(dashboard.checks, "_run", fake)
+    with pytest.raises(RuntimeError, match="launcher"):
+        dashboard._restart_dashboard()
+    assert fake.restarts() == []
+
+
+def test_a_service_that_cannot_start_is_blamed_on_the_port(monkeypatch):
+    fake = FakeSystemd(service_pid=0)
+    monkeypatch.setattr(dashboard.checks, "_run", fake)
+    with pytest.raises(RuntimeError, match="holds its port"):
+        dashboard._restart_dashboard()
+
+
+def test_a_denied_sudo_says_how_to_allow_it(monkeypatch):
+    fake = FakeSystemd(sudo_ok=False)
+    monkeypatch.setattr(dashboard.checks, "_run", fake)
+    with pytest.raises(RuntimeError, match="install-service.sh dashboard"):
+        dashboard._restart_dashboard()
+    assert fake.restarts() == []
+
+
+def test_it_answers_with_a_waiting_page_not_a_redirect(client, systemd, timers):
+    # The action kills the server that would serve a redirect.
     resp = client.post("/action/restart-dashboard")
     assert resp.status_code == 200
-    text = resp.get_data(as_text=True)
-    assert "Restarting the dashboard" in text
+    assert "Restarting the dashboard" in resp.get_data(as_text=True)
 
 
-def test_the_waiting_page_reloads_itself(client, fake_restart):
+def test_the_waiting_page_reloads_itself(client, systemd, timers):
     text = client.post("/action/restart-dashboard").get_data(as_text=True)
-    assert 'http-equiv="refresh"' in text
-    assert 'url=/' in text
+    assert 'http-equiv="refresh"' in text and "url=/" in text
 
 
-def test_the_restart_is_deferred_until_after_the_response(client, fake_restart):
-    # Fired inline, systemd can stop this process mid-response — which is
-    # exactly what leaves the browser on a dead page.
+def test_the_restart_is_deferred_until_after_the_response(client, systemd, timers):
     client.post("/action/restart-dashboard")
-    assert len(fake_restart) == 1
-    assert fake_restart[0].delay > 0
+    assert len(timers) == 1 and timers[0].delay > 0
+    assert systemd.restarts() == []           # not yet
 
 
-def test_a_refused_sudo_goes_back_to_the_page_instead_of_waiting(client, monkeypatch):
+def test_a_refused_restart_goes_back_to_the_page_instead_of_waiting(client, monkeypatch):
     # A waiting page for a restart that will never happen is worse than an
     # error, because it looks like it worked.
-    def fake_run(cmd, timeout=10):
-        if "is-active" in cmd:
-            return (1, "sudo: a password is required")
-        return (0, "")
-
-    monkeypatch.setattr(dashboard.checks, "_run", fake_run)
+    monkeypatch.setattr(dashboard.checks, "_run", FakeSystemd(sudo_ok=False))
     resp = client.post("/action/restart-dashboard", follow_redirects=True)
-    assert "Restarting the dashboard" not in resp.get_data(as_text=True)
-    assert "password is required" in resp.get_data(as_text=True)
+    text = resp.get_data(as_text=True)
+    assert "Restarting the dashboard" not in text
+    assert "without a password" in text
+
+
+def test_a_deferred_restart_that_fails_says_so_on_the_next_page(
+    client, monkeypatch, timers
+):
+    # By the time it runs the response is gone. Silently dropping the error
+    # is what made this look like it worked and changed nothing.
+    fake = FakeSystemd(restart_ok=False)
+    monkeypatch.setattr(dashboard.checks, "_run", fake)
+    client.post("/action/restart-dashboard")
+    timers[0].fn()                              # the restart fires, and fails
+    text = client.get("/orders").get_data(as_text=True)
+    assert "Restart dashboard failed" in text
+    assert "Failed to restart unit" in text
+    # ...once, not on every page from now on.
+    assert "Restart dashboard failed" not in client.get("/orders").get_data(as_text=True)
 
 
 def test_other_actions_still_redirect(client, monkeypatch):
