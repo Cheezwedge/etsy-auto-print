@@ -646,13 +646,16 @@ def cmd_dashboard(config, args) -> int:
 
 
 def cmd_ship_by(config, args) -> int:
-    """Show the ship-by date Etsy reports for recent orders.
+    """Show the ship-by date Etsy reports for recent orders, with evidence.
 
     Everything that waits before telling Etsy "shipped" is capped by this
-    date, so it has to actually be there. This reads what Etsy sends rather
-    than trusting the field name — and when it's missing, lists the
-    ship-related fields that *were* present, so a wrong name is obvious.
+    date, so it has to be there *and* be read correctly. Each line shows the
+    raw value Etsy sent and its UTC reading, so a timezone slip is visible,
+    and orders whose ship-by is the day they were placed are called out —
+    for those, nothing can wait.
     """
+    from datetime import timezone
+
     from .shipdate import etsy_ship_by
 
     client = _build_client(config)
@@ -661,33 +664,61 @@ def cmd_ship_by(config, args) -> int:
         print("No orders in this shop yet — nothing to check.")
         return 0
 
-    missing = 0
+    missing = same_day = 0
     for receipt in receipts:
         rid = receipt.get("receipt_id", "?")
-        placed = receipt.get("created_timestamp") or receipt.get("create_timestamp")
-        placed = datetime.fromtimestamp(placed).strftime("%a %b %d") if placed else "?"
-        digital = all(t.get("is_digital") for t in receipt.get("transactions") or [{}])
+        txns = receipt.get("transactions") or []
+        stamp = receipt.get("created_timestamp") or receipt.get("create_timestamp")
+        placed = datetime.fromtimestamp(stamp).date() if stamp else None
+        placed_text = f"{placed:%a %b %d}" if placed else "?"
+        status = str(receipt.get("status") or "")
         deadline = etsy_ship_by(receipt)
+
         if deadline:
-            print(f"  ok       #{rid}  placed {placed}  ship by {deadline:%a %b %d}")
-        elif digital:
-            print(f"  digital  #{rid}  placed {placed}  nothing to ship")
+            raw = min(t["expected_ship_date"] for t in txns
+                      if isinstance(t.get("expected_ship_date"), (int, float))
+                      and t["expected_ship_date"] > 0)
+            utc = datetime.fromtimestamp(raw, tz=timezone.utc)
+            flag = ""
+            if placed and deadline <= placed:
+                same_day += 1
+                flag = "  <- same day as placed"
+            print(f"  ok        #{rid}  placed {placed_text}  ship by "
+                  f"{deadline:%a %b %d}{flag}")
+            print(f"            Etsy sent {raw} = {utc:%Y-%m-%d %H:%M} UTC")
+        elif txns and all(t.get("is_digital") for t in txns):
+            print(f"  digital   #{rid}  placed {placed_text}  nothing to ship")
+        elif "cancel" in status.lower() or "refund" in status.lower():
+            print(f"  {status.lower()[:9]:<9} #{rid}  placed {placed_text}  "
+                  "not shipping — no ship-by needed")
+        elif any("expected_ship_date" in t for t in txns):
+            missing += 1
+            print(f"  EMPTY     #{rid}  placed {placed_text}  expected_ship_date "
+                  f"is present but blank (status: {status or 'unknown'})")
         else:
             missing += 1
-            seen = sorted({
-                key for txn in receipt.get("transactions") or []
-                for key in txn if "ship" in key.lower()
-            } | {key for key in receipt if "ship" in key.lower()})
-            print(f"  MISSING  #{rid}  placed {placed}  no ship-by date found")
-            print(f"           ship-related fields Etsy sent: {', '.join(seen) or 'none'}")
+            seen = sorted({key for t in txns for key in t if "ship" in key.lower()}
+                          | {key for key in receipt if "ship" in key.lower()})
+            print(f"  MISSING   #{rid}  placed {placed_text}  no ship-by field")
+            print(f"            ship-related fields Etsy sent: {', '.join(seen) or 'none'}")
 
     print()
+    if same_day:
+        print(
+            f"{same_day} order(s) must ship the same day they were placed, "
+            "according to Etsy.\nFor those, nothing can wait: telling Etsy "
+            "any later would count as a late shipment, so both "
+            "next_business_day and carrier_scan tell Etsy immediately.\n"
+            "If that isn't how you work, check the processing time on your "
+            "Etsy shipping profile — or tell me what Etsy shows as \"Ship by\" "
+            "for one of these orders, in case this is being misread."
+        )
     if missing:
-        print(f"{missing} order(s) had no ship-by date. Anything that waits for "
-              "USPS falls back to the next business day for those — paste the "
-              "field list above so the right one can be read.")
+        print(f"{missing} open order(s) had no usable ship-by date; those fall "
+              "back to the next business day.")
         return 1
-    print("Ship-by dates are readable. Safe to use mark_shipped = \"carrier_scan\".")
+    if not same_day:
+        print('Ship-by dates look right. Safe to use mark_shipped = "carrier_scan".')
     return 0
 
 

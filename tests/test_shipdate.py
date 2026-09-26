@@ -487,12 +487,46 @@ def test_ship_by_reports_readable_dates(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert code == 0
     assert "ship by Mon Sep 28" in out
+    assert "UTC" in out                    # the raw evidence, not just a verdict
     assert "carrier_scan" in out
 
 
+def test_ship_by_calls_out_same_day_deadlines(monkeypatch, capsys):
+    # A ship-by equal to the order day makes every waiting mode a no-op:
+    # waiting at all would be a late shipment. That must be said, not hidden.
+    code = run_ship_by(monkeypatch, [{
+        "receipt_id": 1, "created_timestamp": int(at(2026, 9, 26, 9)),
+        "transactions": [{"expected_ship_date": int(at(2026, 9, 26, 23))}],
+    }])
+    out = capsys.readouterr().out
+    assert "same day as placed" in out
+    assert "processing time" in out
+    assert "Safe to use" not in out
+
+
+def test_a_cancelled_order_is_not_a_missing_field(monkeypatch, capsys):
+    # The field is there but blank because the order was cancelled; sending
+    # someone to look for a different field name was wrong.
+    code = run_ship_by(monkeypatch, [{
+        "receipt_id": 4, "status": "Canceled",
+        "transactions": [{"expected_ship_date": None}],
+    }])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "not shipping" in out and "MISSING" not in out
+
+
+def test_a_blank_field_on_an_open_order_is_reported_as_blank(monkeypatch, capsys):
+    code = run_ship_by(monkeypatch, [{
+        "receipt_id": 5, "status": "Paid",
+        "transactions": [{"expected_ship_date": None}],
+    }])
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "EMPTY" in out and "present but blank" in out
+
+
 def test_ship_by_names_the_fields_etsy_did_send(monkeypatch, capsys):
-    # If the field has another name, this is what makes that obvious rather
-    # than silently disabling the deadline.
     code = run_ship_by(monkeypatch, [{
         "receipt_id": 2, "created_timestamp": int(at(2026, 9, 25)),
         "transactions": [{"ship_by_timestamp": 1, "shipping_method": "x"}],
