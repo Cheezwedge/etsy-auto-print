@@ -63,7 +63,7 @@ Etsy order paid
 | Postage + barcode | Shippo API | Pay-per-label tier, address validation included, native 4x6 PDF/PNG/ZPL output, well-documented |
 | Runtime | Single Python service + SQLite, systemd unit on a Raspberry Pi | One box, no cloud hosting, printer is local so printing is a trivial `lp` call |
 | Printing | CUPS raw queue (`lp -d label -o media=4x6`) | Rollo/Munbyn/DYMO 4XL all have CUPS drivers; Zebra printers can be sent raw ZPL instead |
-| Notifications | Email (or ntfy.sh push) on failure | Orders that can't auto-process must be visible, not silently stuck |
+| Notifications | ntfy and/or Pushover push: held orders, sell-outs, and (optionally) each order ready to pack | Orders that can't auto-process must be visible, not silently stuck |
 
 Polling is the recommended v1 signal: a home Pi has no public HTTPS endpoint
 for webhooks, and 3-minute latency is irrelevant when packages go out once a
@@ -74,7 +74,8 @@ without opening ports).
 
 - **Idempotency is non-negotiable** — postage costs real money. SQLite keeps a
   row per `receipt_id` with a state machine:
-  `new → label_purchased → printed → tracking_posted → done` (or `held`).
+  `new → slip_printed → label_purchased → label_printed → tracking_posted →
+  done` (or `held`).
   Every step records before it acts; a crash mid-order resumes without
   double-buying.
 - **Parcel presets** ✅ — SKUs map to named box presets (`[labels.parcels.<name>]`
@@ -113,7 +114,10 @@ without opening ports).
   mark-as-shipped is what Etsy's seller metrics penalise. `ship_date` sent to
   Etsy is the posting day in local time — it had been the label purchase date
   in UTC, already tomorrow on a US evening. Same-day parcels skip the wait via
-  `mark-shipped`, which reads scanned pick-slip barcodes.
+  `mark-shipped`, which reads scanned pick-slip barcodes. `mark_shipped =
+  "carrier_scan"` instead posts when Shippo reports a USPS scan, with the
+  ship-by date as the backstop. The reason each order was posted when it
+  was is written to its history.
 - **Hold, don't guess** — address fails validation, no rate returned, printer
   offline, unmapped item: mark `held`, print nothing, send a notification.
   A `retry <receipt_id>` CLI command re-runs a held order after you fix it.

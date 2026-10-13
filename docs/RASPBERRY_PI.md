@@ -485,7 +485,8 @@ turns the next `git pull` into a merge conflict.
   service, Etsy reachability, token permissions, Shippo, printer,
   notifications. Exits non-zero if anything is failing, so it works as the
   health command behind a desktop shortcut or a cron alert.
-- Update: `cd ~/etsy-auto-print && git pull && sudo systemctl restart etsy-auto-print`
+- Update: `cd ~/etsy-auto-print && git pull && sudo systemctl restart etsy-auto-print etsy-auto-print-dashboard`
+  — restart both, or the old code keeps running (`check` warns if it is).
 - Back up the three private files occasionally:
 
 ```bash
@@ -504,4 +505,6 @@ turns the next `git pull` into a merge conflict.
 | Garbage characters printed | Raw queue + PDF file type mismatch: Zebra wants `ZPLII`, driver queues want `PDF_4x6` |
 | Poll errors after weeks of uptime | Etsy refresh token expired (90 days idle) — rerun `auth` via the SSH tunnel |
 | Etsy calls suddenly 403 | `etsy-auto-print check` — "Etsy permissions" names any scope the token is missing; "Etsy API reachable" separates an Etsy outage or a bad keystring from a bad token |
+| `check` says "running OLD code", or the dashboard header shows an old version | A `git pull` wasn't followed by a restart: `sudo systemctl restart etsy-auto-print etsy-auto-print-dashboard` |
+| Etsy told "shipped" the moment the label printed | `show <id>`: the `tracking_posted` note says why (ship-by date today, `mark_shipped = immediately`, …). No reason at all means the poller predates that change — restart it |
 | Service dead after power cut | `journalctl -u etsy-auto-print -b` for the reason; it auto-restarts on failure |

@@ -8,7 +8,8 @@ it works internally.
 
 **How it actually runs, stated plainly:**
 
-- **It polls; it is not instant.** Etsy offers no order webhook, so this asks
+- **It polls; it is not instant.** Etsy's order webhook needs a public HTTPS
+  endpoint, which a home Pi doesn't have, so this asks
   Etsy for paid-but-unshipped orders on a timer — every 3 minutes by default
   (`poll.interval_seconds`). A new order is picked up within one interval, not
   the moment it is placed.
@@ -131,9 +132,11 @@ the Pi, in the project directory), and **Connect to Pi** (a bare `ssh`).
 
 Editors have **Save** and **Save & apply** — the latter also restarts the
 service (config is read at startup, so changes are inert until then) and
-drops you on Status with a checklist of what to verify. See
-[docs/RASPBERRY_PI.md](docs/RASPBERRY_PI.md) for the one-line sudoers rule
-that lets the restart button work without a password.
+drops you on Status with a checklist of what to verify. The header has two
+restart buttons: **Restart poller** (the order service) and **Restart
+dashboard** (this page's own process, needed after a `git pull`).
+`./systemd/install-service.sh` installs the narrow sudoers rule that lets
+both work without a password — see [docs/RASPBERRY_PI.md](docs/RASPBERRY_PI.md).
 
 ### 5. Enable shipping labels (phase 2)
 
@@ -180,14 +183,21 @@ app, subscribe to a hard-to-guess topic name, then:
 ntfy_url = "https://ntfy.sh/your-secret-topic-name"
 ```
 
+[Pushover](https://pushover.net) works too, alongside or instead of ntfy:
+set `pushover_user_key` and `pushover_api_token` under `[notify]`.
+
 ```bash
 etsy-auto-print test-notify   # should pop up on your phone
 ```
 
 You get a push when an order has printed and is ready to pack (with what to
-put in the box), and when one is held or a listing sells out. Set
-`on_order = false` under `[notify]` if you ship all day and only want to hear
-about problems.
+put in the box, and the day Etsy will be told it shipped), and when one is
+held or a listing sells out. Set `on_order = false` under `[notify]` if you
+ship all day and only want to hear about problems.
+
+Sold-out detection is most reliable with Etsy's `listings_r` permission,
+which Etsy doesn't grant every app. If `check` keeps warning that it's
+missing, set `optional_scopes = []` under `[etsy]` to stop asking for it.
 
 ### 7. Going live
 
@@ -276,6 +286,19 @@ Shippo invoice, not immediately.
 For always-on operation on a Raspberry Pi, follow the full step-by-step
 guide in [docs/RASPBERRY_PI.md](docs/RASPBERRY_PI.md).
 
+## Updating
+
+```bash
+cd ~/etsy-auto-print && git pull
+sudo systemctl restart etsy-auto-print
+sudo systemctl restart etsy-auto-print-dashboard
+```
+
+Restart **both**: `git pull` changes the files, not the processes already
+running them. Until restarted, orders are handled by the old code even though
+`check` (a fresh process) reports the new version. `check` and the
+dashboard warn when either one is running older code than what's on disk.
+
 ## How it stays safe
 
 - Every order lives in a local SQLite database (`orders.db`) with a state
@@ -334,8 +357,12 @@ there instead.
 ## Development
 
 ```bash
+pip install -e ".[dev,dashboard]"
 pytest
 ```
+
+[CLAUDE.md](CLAUDE.md) has the design decisions, conventions and gotchas a
+contributor needs; [CHANGELOG.md](CHANGELOG.md) has the history.
 
 ## License
 
