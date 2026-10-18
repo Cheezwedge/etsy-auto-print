@@ -117,7 +117,35 @@ etsy-auto-print check       # health-check every connection (exit 1 if broken)
 etsy-auto-print show 123    # details + event history for one order
 etsy-auto-print reprint 123 # re-print a slip (also un-holds a held order)
 etsy-auto-print dashboard   # web UI: status, config/products, logs, tests
+etsy-auto-print update      # pull, install, restart the poller and the dashboard
 ```
+
+### Updating the Pi
+
+One command pulls the latest code, installs any dependency changes, and
+restarts **both** the poller and the dashboard. The dashboard is installed
+as a systemd service the first time (enabled at boot, restarted by systemd
+if it crashes), so later updates restart it the same way as the poller.
+
+The restart does not cut off a postage purchase or a print. The poller
+finishes the order it is already on, and the updater waits until nothing is
+mid-purchase before it asks either service to stop. Running it again is safe.
+
+The first time — the command is not on the Pi until this version is pulled:
+
+```bash
+cd ~/etsy-auto-print && git pull && ./update.sh
+```
+
+Every time after, from any directory:
+
+```bash
+etsy-auto-print update
+```
+
+That prints a line like `Updated etsy-auto-print to 0.1.0 (abc1234). git rev-parse --short HEAD is abc1234; the dashboard header shows 0.1.0 (abc1234).` Reload the dashboard. The version in the header is that same text. `0.1.0 (abc1234, modified)` means the checkout has local edits, and the header will say so too.
+
+`~/etsy-auto-print/update.sh` is the same command, if `etsy-auto-print` is not on your PATH.
 
 ### Dashboard
 

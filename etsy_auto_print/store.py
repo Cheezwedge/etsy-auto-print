@@ -380,12 +380,14 @@ class Store:
         return cur.rowcount == 1
 
     def label_attempted(self, receipt_id: int) -> bool:
-        return (
-            self.conn.execute(
-                "SELECT 1 FROM label_attempts WHERE receipt_id = ?", (receipt_id,)
-            ).fetchone()
-            is not None
-        )
+        return self.label_attempt_at(receipt_id) is not None
+
+    def label_attempt_at(self, receipt_id: int) -> float | None:
+        """When a purchase was claimed, or None if it never was."""
+        row = self.conn.execute(
+            "SELECT at FROM label_attempts WHERE receipt_id = ?", (receipt_id,)
+        ).fetchone()
+        return None if row is None else float(row["at"])
 
     def clear_label_attempt(self, receipt_id: int) -> None:
         self.conn.execute("DELETE FROM label_attempts WHERE receipt_id = ?", (receipt_id,))

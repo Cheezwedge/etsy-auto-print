@@ -16,12 +16,15 @@
     etsy-auto-print print-now ID      buy postage and print a waiting order now
     etsy-auto-print skip ID           drop a waiting order without buying postage
     etsy-auto-print refund ID         request postage back on an unused label
+    etsy-auto-print update            pull, install, restart poller and dashboard
 """
 
 from __future__ import annotations
 
 import argparse
 import logging
+import os
+import signal
 import sys
 import tempfile
 import time
@@ -30,6 +33,7 @@ from datetime import datetime
 
 from . import checks, stock
 from .about import running_version, version_label
+from .update import request_stop, serve_until_stopped
 from .auth import AuthError, TokenStore, authorize
 from .config import Config, ConfigError, load_config
 from .etsy import EtsyApiError, EtsyClient
@@ -119,6 +123,20 @@ def cmd_auth(config, args) -> int:
     return 0
 
 
+def cmd_update(config, args) -> int:
+    """Re-exec update.sh so there is one update path."""
+    script = Path(__file__).resolve().parent.parent / "update.sh"
+    if not os.access(script, os.X_OK):
+        print(f"Update script is missing or not executable: {script}", file=sys.stderr)
+        return 1
+    extra = ["--dry-run"] if args.dry_run else []
+    try:
+        os.execv(script, [str(script), *extra])
+    except OSError as exc:
+        print(f"Could not run {script}: {exc}", file=sys.stderr)
+        return 1
+
+
 def cmd_poll(config, args) -> int:
     client = _build_client(config)
     store = Store(config.db_path)
@@ -165,7 +183,18 @@ def cmd_run(config, args) -> int:
         config.labels.mark_shipped if labeler else "n/a",
         delay_text,
     )
-    while True:
+    # SIGTERM is how `update` and `systemctl restart` stop this process.
+    # Finish the poll already in progress — that is the purchase and the
+    # print — and do not start another. A second signal stops immediately.
+    stop = {"flag": False, "signal": None}
+
+    def _on_signal(signum, _frame):
+        request_stop(stop, signum)
+
+    signal.signal(signal.SIGTERM, _on_signal)
+    signal.signal(signal.SIGINT, _on_signal)
+
+    def _poll():
         try:
             poll_once(
                 client, store, printer, labeler, notifier, watcher,
@@ -175,7 +204,15 @@ def cmd_run(config, args) -> int:
             # Transient API failures shouldn't kill the service; the next
             # poll retries and nothing is lost (state lives in SQLite).
             logging.error("Poll failed: %s", exc)
-        time.sleep(config.poll_interval)
+
+    serve_until_stopped(_poll, config.poll_interval, lambda: stop["flag"])
+    if stop["flag"]:
+        logging.info(
+            "Stopped after the current poll (signal %s). A purchase already "
+            "started stays claimed, so it is not bought twice.",
+            stop["signal"],
+        )
+    return 0
 
 
 def cmd_status(config, args) -> int:
@@ -1261,6 +1298,16 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("poll", help="check for new orders once").set_defaults(func=cmd_poll)
     sub.add_parser("run", help="poll continuously").set_defaults(func=cmd_run)
+    p = sub.add_parser(
+        "update",
+        help="pull the latest code, install dependencies, restart poller and dashboard",
+    )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print what would be pulled, installed, and restarted",
+    )
+    p.set_defaults(func=cmd_update, needs_config=False)
     sub.add_parser("status", help="list orders and states").set_defaults(func=cmd_status)
     sub.add_parser(
         "check", help="health-check every connection (Etsy, Shippo, printer, ...)"

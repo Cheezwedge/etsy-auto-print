@@ -20,6 +20,9 @@ WorkingDirectory=/home/pi/etsy-auto-print
 ExecStart=/home/pi/etsy-auto-print/.venv/bin/etsy-auto-print run
 Restart=on-failure
 RestartSec=30
+# Stop waits this long before killing the process. The poller uses that
+# time to finish a postage purchase or print already in progress.
+TimeoutStopSec=300
 
 [Install]
 WantedBy=multi-user.target

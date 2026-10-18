@@ -316,24 +316,24 @@ To have it always running, install it as its own service:
 ./systemd/install-service.sh dashboard
 ```
 
-**After a `git pull`, restart the poller.** `git pull` changes the files,
-not the process already running them: until `sudo systemctl restart
-etsy-auto-print`, orders are handled by the old code, while `check` (a fresh
-process) cheerfully reports the new version. `check` and the dashboard's
-status page now warn "running OLD code" when that happens, and the poller
-logs its version at startup (`journalctl -u etsy-auto-print | grep polling`).
-
-**Restart the dashboard too.** It is a separate
-long-lived process from the poller, so `systemctl restart etsy-auto-print`
-does not touch it — and the desktop launcher deliberately reuses a dashboard
-that is already running rather than starting a new one. The version in the
-page header tells you what is actually loaded; compare it with
-`git rev-parse --short HEAD`.
+**Update with one command.** It pulls, installs dependency changes, and
+restarts the poller and the dashboard. The first run also installs the
+dashboard as a service (enabled at boot, restarted on failure) if it is
+not one yet.
 
 ```bash
-sudo systemctl restart etsy-auto-print-dashboard   # if it runs as a service
-pkill -f "etsy-auto-print dashboard"               # otherwise; then relaunch
+cd ~/etsy-auto-print && git pull && ./update.sh   # once, to get the command
+etsy-auto-print update                            # every time after
 ```
+
+`git pull` on its own changes the files, not the processes already running
+them. `update` restarts both. It waits out a postage purchase or a print
+already in progress, and the poller finishes its current poll before it
+exits, so an update does not buy a label twice. The last line of output is
+the new version; it matches `git rev-parse --short HEAD` and the version in
+the dashboard header. `check` and the status page still warn "running OLD
+code" if a restart was skipped, and the poller logs its version at startup
+(`journalctl -u etsy-auto-print | grep polling`).
 
 ### One-click launchers on your Linux desktop
 
@@ -485,7 +485,7 @@ turns the next `git pull` into a merge conflict.
   service, Etsy reachability, token permissions, Shippo, printer,
   notifications. Exits non-zero if anything is failing, so it works as the
   health command behind a desktop shortcut or a cron alert.
-- Update: `cd ~/etsy-auto-print && git pull && sudo systemctl restart etsy-auto-print`
+- Update: `etsy-auto-print update` (the first time, `cd ~/etsy-auto-print && git pull && ./update.sh`)
 - Back up the three private files occasionally:
 
 ```bash
