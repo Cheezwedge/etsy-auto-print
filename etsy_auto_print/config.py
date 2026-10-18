@@ -135,6 +135,10 @@ class Config:
     dashboard_password: str | None
     notify_on_order: bool
     optional_scopes: tuple
+    # Minutes to wait after an order is placed before buying postage.
+    # 0 keeps the historical behavior (buy on the poll that first sees it).
+    # The dashboard can override this; see pipeline.describe_delay.
+    label_delay_minutes: int = 0
 
     @property
     def oauth_scopes(self) -> str:
@@ -409,6 +413,23 @@ def installed_config_path() -> Path:
     return Path(__file__).resolve().parent.parent / DEFAULT_CONFIG_NAME
 
 
+def _label_delay_minutes(poll: dict) -> int:
+    """How long config.toml waits before postage. The dashboard can override it.
+
+    Hours are a dashboard choice; the file speaks minutes so there is one
+    number to read. 0 (the default) buys on the poll that first sees the order.
+    """
+    raw = poll.get("label_delay_minutes", 0)
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
+        raise ConfigError(
+            "poll.label_delay_minutes must be a whole number of minutes, 0 or more. "
+            "The Orders page on the dashboard can set hours."
+        )
+    if raw > 14 * 24 * 60:
+        raise ConfigError("poll.label_delay_minutes cannot be longer than 14 days")
+    return raw
+
+
 def load_config(path: str | Path | None = None) -> Config:
     cfg_path = Path(path) if path else Path(DEFAULT_CONFIG_NAME)
     if not cfg_path.exists() and path is None:
@@ -494,4 +515,5 @@ def load_config(path: str | Path | None = None) -> Config:
         optional_scopes=tuple(
             etsy.get("optional_scopes", DEFAULT_OPTIONAL_SCOPES)
         ),
+        label_delay_minutes=_label_delay_minutes(poll),
     )
