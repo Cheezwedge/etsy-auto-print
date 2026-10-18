@@ -355,6 +355,22 @@ def test_listings_r_is_requested_by_default(tmp_path):
     assert "listings_r" in config.oauth_scopes
 
 
+def test_label_delay_defaults_to_zero(tmp_path):
+    assert minimal(tmp_path).label_delay_minutes == 0
+
+
+def test_label_delay_minutes_loads(tmp_path):
+    cfg = write(tmp_path, "[poll]\nlabel_delay_minutes = 45\n")
+    assert load_config(cfg).label_delay_minutes == 45
+
+
+@pytest.mark.parametrize("value", ["-1", "1.5", "true", "20161"])
+def test_label_delay_minutes_rejects_bad_values(tmp_path, value):
+    cfg = write(tmp_path, f"[poll]\nlabel_delay_minutes = {value}\n")
+    with pytest.raises(ConfigError, match="label_delay_minutes"):
+        load_config(cfg)
+
+
 def test_asking_for_nothing_optional_still_asks_for_the_essentials(tmp_path):
     # Etsy may refuse an optional scope outright; dropping it must not drop
     # the three the pipeline cannot work without.

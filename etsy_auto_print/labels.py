@@ -263,14 +263,6 @@ class Labeler:
 
     def _purchase(self, receipt: dict) -> None:
         rid = receipt["receipt_id"]
-        if self.store.label_attempted(rid):
-            raise LabelError(
-                "a previous label purchase attempt did not record a result — "
-                f"search the Shippo dashboard for {label_metadata(rid)!r} to see "
-                "whether it was charged, before retrying "
-                "(clear with: etsy-auto-print clear-attempt)"
-            )
-
         address_to = build_address_to(receipt)
         if address_to["country"] != self.config.ship_from.get("country", "US"):
             # Stop here rather than let the carrier reject it. Shippo can buy
@@ -334,7 +326,17 @@ class Labeler:
         )
 
         # Record intent *before* money moves, result immediately after.
-        self.store.record_label_attempt(rid)
+        # claim, not a check-then-insert: the poller and "Print now" are
+        # different processes and both can reach this line together.
+        if not self.store.claim_label_attempt(rid):
+            if self.store.get_label(rid) is not None:
+                return
+            raise LabelError(
+                "a previous label purchase attempt did not record a result — "
+                f"search the Shippo dashboard for {label_metadata(rid)!r} to see "
+                "whether it was charged, before retrying "
+                "(clear with: etsy-auto-print clear-attempt)"
+            )
         try:
             # The tag is what makes a Shippo charge identifiable after the
             # fact: without it the dashboard shows a row of near-identical

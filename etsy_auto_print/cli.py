@@ -13,6 +13,8 @@
     etsy-auto-print test-order        one fake order, slip + label, end to end
     etsy-auto-print print-label FILE  print a label bought elsewhere
     etsy-auto-print mark-shipped      tell Etsy printed orders shipped today
+    etsy-auto-print print-now ID      buy postage and print a waiting order now
+    etsy-auto-print skip ID           drop a waiting order without buying postage
     etsy-auto-print refund ID         request postage back on an unused label
 """
 
@@ -44,9 +46,15 @@ from .notify import Notifier
 from .pipeline import (
     StockWatcher,
     advance_order,
+    delay_phrase,
+    describe_delay,
+    format_countdown,
     poll_once,
     post_tracking,
+    print_now_order,
+    release_timestamp,
     reprint,
+    skip_waiting_order,
 )
 from .pdf2zpl import PdfConvertError
 from .printer import FilePrinter, PrintError, get_printer, prepare_for_label_queue
@@ -118,7 +126,10 @@ def cmd_poll(config, args) -> int:
     labeler = _build_labeler(config, store, printer)
     notifier = _build_notifier(config)
     watcher = StockWatcher(config.stock, store, notifier)
-    n = poll_once(client, store, printer, labeler, notifier, watcher)
+    n = poll_once(
+        client, store, printer, labeler, notifier, watcher,
+        config_delay_minutes=config.label_delay_minutes,
+    )
     print(f"{n} order(s) made progress.")
     return 0
 
@@ -133,6 +144,10 @@ def cmd_run(config, args) -> int:
     # Recorded so `check` can tell when a `git pull` hasn't been followed by
     # a restart: the files are new, but this process still runs the old code.
     store.set_meta("poller_version", running_version())
+    delay_amount, delay_unit, delay_seconds = describe_delay(
+        store, config.label_delay_minutes
+    )
+    delay_text = "off" if delay_seconds == 0 else delay_phrase(delay_amount, delay_unit)
     notify_channels = ", ".join(
         c for c in (
             "ntfy" if config.ntfy_url else None,
@@ -141,17 +156,21 @@ def cmd_run(config, args) -> int:
     ) or "log only"
     logging.info(
         "etsy-auto-print %s: polling every %ss (printer: %s, labels: %s, "
-        "notify: %s, mark shipped: %s). Ctrl-C to stop.",
+        "notify: %s, mark shipped: %s, label delay: %s). Ctrl-C to stop.",
         running_version(),
         config.poll_interval,
         config.printer_backend,
         "on" if labeler else "off",
         notify_channels,
         config.labels.mark_shipped if labeler else "n/a",
+        delay_text,
     )
     while True:
         try:
-            poll_once(client, store, printer, labeler, notifier, watcher)
+            poll_once(
+                client, store, printer, labeler, notifier, watcher,
+                config_delay_minutes=config.label_delay_minutes,
+            )
         except (EtsyApiError, AuthError) as exc:
             # Transient API failures shouldn't kill the service; the next
             # poll retries and nothing is lost (state lives in SQLite).
@@ -166,9 +185,16 @@ def cmd_status(config, args) -> int:
         print("No orders recorded yet.")
         return 0
     print(f"{'ORDER':<14}{'STATE':<18}{'BUYER':<24}{'UPDATED':<18}NOTE")
+    _, _, delay_seconds = describe_delay(store, config.label_delay_minutes)
+    status_now = time.time()
     for row in orders:
         updated = datetime.fromtimestamp(row["updated_at"]).strftime("%m-%d %H:%M")
         note = row["error"] or ""
+        if not note and row["state"] == "waiting":
+            remaining = int(release_timestamp(row, delay_seconds) - status_now)
+            note = "prints " + ("due now" if remaining <= 0 else format_countdown(remaining))
+        elif not note and row["state"] == "releasing":
+            note = "buying postage and printing"
         print(
             f"{row['receipt_id']:<14}{row['state']:<18}"
             f"{(row['buyer_name'] or '?')[:22]:<24}{updated:<18}{note}"
@@ -814,6 +840,40 @@ def cmd_dump_receipt(config, args) -> int:
     return 0
 
 
+def cmd_print_now(config, args) -> int:
+    """Buy postage and print one waiting order, without the rest of the delay."""
+    store = Store(config.db_path)
+    printer = get_printer(config)
+    labeler = _build_labeler(config, store, printer)
+    try:
+        etsy = _build_client(config)
+    except AuthError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    try:
+        ok, message = print_now_order(
+            args.receipt_id, store, printer, labeler, etsy, _build_notifier(config),
+            config_delay_minutes=config.label_delay_minutes,
+        )
+    except (KeyError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    print(message)
+    return 0 if ok else 1
+
+
+def cmd_skip(config, args) -> int:
+    """Drop a waiting order. Postage is not bought."""
+    store = Store(config.db_path)
+    try:
+        note = skip_waiting_order(store, args.receipt_id)
+    except (KeyError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    print(f"Order #{args.receipt_id}: {note}")
+    return 0
+
+
 def cmd_retry(config, args) -> int:
     """Re-run the pipeline for a held order after fixing the cause."""
     store = Store(config.db_path)
@@ -1260,6 +1320,18 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("retry", help="re-run the pipeline for a held order")
     p.add_argument("receipt_id", type=int)
     p.set_defaults(func=cmd_retry)
+
+    p = sub.add_parser(
+        "print-now", help="buy postage and print a waiting order immediately"
+    )
+    p.add_argument("receipt_id", type=int)
+    p.set_defaults(func=cmd_print_now)
+
+    p = sub.add_parser(
+        "skip", help="drop a waiting order without buying postage"
+    )
+    p.add_argument("receipt_id", type=int)
+    p.set_defaults(func=cmd_skip)
 
     p = sub.add_parser("reprint-label", help="re-print an already-purchased label")
     p.add_argument("receipt_id", type=int)

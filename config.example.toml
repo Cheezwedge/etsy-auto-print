@@ -29,6 +29,13 @@ redirect_port = 8231
 # How often `run` checks for new paid, unshipped orders.
 interval_seconds = 180
 
+# Wait this many minutes after an order is placed before buying postage and
+# printing the label, so a buyer can cancel or fix the address. 0 (the
+# default) prints on the next poll. The dashboard's Orders page edits the
+# same setting in minutes or hours; once you save it there, that saved value
+# is what the poller uses, and it applies on the next poll without a restart.
+# label_delay_minutes = 30
+
 [printer]
 # "file"  — write packing slips into the outbox directory (no printer needed)
 # "cups"  — send to a CUPS print queue via `lp` (once you have a printer)
