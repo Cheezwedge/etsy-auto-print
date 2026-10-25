@@ -7,6 +7,8 @@ schema migration:
     new -> slip_printed                      (phase 1 stops here)
         -> label_purchased -> label_printed
         -> tracking_posted -> done
+    new -> waiting -> releasing              (label delay; releasing is in-flight)
+        -> slip_printed -> ...
     any state -> held                        (needs human attention)
 
 Phase 1 only moves orders new -> slip_printed / held, but records every
@@ -22,6 +24,8 @@ from pathlib import Path
 
 STATES = (
     "new",
+    "waiting",       # label delay has not elapsed
+    "releasing",     # delay elapsed; postage re-check / purchase in flight
     "slip_printed",
     "label_purchased",
     "label_printed",
@@ -38,7 +42,9 @@ CREATE TABLE IF NOT EXISTS orders (
     created_at  REAL NOT NULL,
     updated_at  REAL NOT NULL,
     error       TEXT,
-    receipt_json TEXT
+    receipt_json TEXT,
+    placed_at   REAL,
+    release_at  REAL
 );
 CREATE TABLE IF NOT EXISTS events (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -116,10 +122,21 @@ _LABEL_MIGRATIONS = {
     "height_in": "REAL",
 }
 
+# When the buyer placed the order, and an optional explicit print time.
+# release_at NULL means "placed_at plus the configured delay"; 0 means
+# print on the next pass (the dashboard's Print now).
+_ORDER_MIGRATIONS = {
+    "placed_at": "REAL",
+    "release_at": "REAL",
+}
+
 
 class Store:
     def __init__(self, path: str | Path):
-        self.conn = sqlite3.connect(path)
+        # timeout: Print now runs in the dashboard process while the poller
+        # may be claiming the same order. The claim itself is a short write;
+        # wait for it rather than failing the poll.
+        self.conn = sqlite3.connect(path, timeout=30)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(_SCHEMA)
         self._migrate()
@@ -127,22 +144,49 @@ class Store:
 
     def _migrate(self) -> None:
         """Add columns missing from a database created by an older version."""
-        have = {row["name"] for row in self.conn.execute("PRAGMA table_info(labels)")}
-        for column, decl in _LABEL_MIGRATIONS.items():
+        self._add_columns("labels", _LABEL_MIGRATIONS)
+        self._add_columns("orders", _ORDER_MIGRATIONS)
+
+    def _add_columns(self, table: str, columns: dict) -> None:
+        have = {row["name"] for row in self.conn.execute(f"PRAGMA table_info({table})")}
+        for column, decl in columns.items():
             if column not in have:
-                self.conn.execute(f"ALTER TABLE labels ADD COLUMN {column} {decl}")
+                self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+
+    def _begin_immediate(self) -> None:
+        """Take the write lock before a check-then-update.
+
+        Two processes (the poller and the dashboard) can both decide an
+        order is ready. The check and the update have to be one transaction
+        or both will buy postage.
+        """
+        try:
+            self.conn.execute("BEGIN IMMEDIATE")
+        except sqlite3.OperationalError as exc:
+            if "transaction" not in str(exc).lower():
+                raise
+            self.conn.rollback()
+            self.conn.execute("BEGIN IMMEDIATE")
 
     def close(self) -> None:
         self.conn.close()
 
-    def register(self, receipt: dict) -> bool:
+    def register(self, receipt: dict, now: float | None = None) -> bool:
         """Insert a receipt as 'new' if unseen. Returns True if newly added."""
-        now = time.time()
+        now = time.time() if now is None else now
+        placed = placed_timestamp(receipt, now)
         cur = self.conn.execute(
             "INSERT OR IGNORE INTO orders "
-            "(receipt_id, state, buyer_name, created_at, updated_at, receipt_json) "
-            "VALUES (?, 'new', ?, ?, ?, ?)",
-            (receipt["receipt_id"], receipt.get("name"), now, now, json.dumps(receipt)),
+            "(receipt_id, state, buyer_name, created_at, updated_at, receipt_json, placed_at) "
+            "VALUES (?, 'new', ?, ?, ?, ?, ?)",
+            (
+                receipt["receipt_id"],
+                receipt.get("name"),
+                now,
+                now,
+                json.dumps(receipt),
+                placed,
+            ),
         )
         if cur.rowcount:
             self._log_event(receipt["receipt_id"], None, "new", "first seen in poll")
@@ -192,6 +236,115 @@ class Store:
     def hold(self, receipt_id: int, reason: str) -> None:
         self.transition(receipt_id, "held", reason)
 
+    def transition_if(
+        self, receipt_id: int, from_states: tuple[str, ...], to_state: str, note: str = ""
+    ) -> bool:
+        """Move the order only if it is still in one of `from_states`.
+
+        Returns False when another process already moved it.
+        """
+        if to_state not in STATES:
+            raise ValueError(f"Unknown state {to_state!r}")
+        self._begin_immediate()
+        try:
+            row = self.conn.execute(
+                "SELECT state FROM orders WHERE receipt_id = ?", (receipt_id,)
+            ).fetchone()
+            if row is None or row["state"] not in from_states:
+                self.conn.commit()
+                return False
+            self.conn.execute(
+                "UPDATE orders SET state = ?, updated_at = ?, error = ? WHERE receipt_id = ?",
+                (to_state, time.time(), note if to_state == "held" else None, receipt_id),
+            )
+            self._log_event(receipt_id, row["state"], to_state, note)
+            self.conn.commit()
+            return True
+        except Exception:
+            self.conn.rollback()
+            raise
+
+    def update_receipt(self, receipt: dict) -> None:
+        """Replace the stored receipt, leaving the state and the delay anchor."""
+        self.conn.execute(
+            "UPDATE orders SET buyer_name = ?, receipt_json = ? WHERE receipt_id = ?",
+            (receipt.get("name"), json.dumps(receipt), receipt["receipt_id"]),
+        )
+        self.conn.commit()
+
+    def set_placed_at(self, receipt_id: int, placed_at: float) -> None:
+        """Record when the order was placed, once. Never moves an anchor."""
+        self.conn.execute(
+            "UPDATE orders SET placed_at = ? WHERE receipt_id = ? AND placed_at IS NULL",
+            (placed_at, receipt_id),
+        )
+        self.conn.commit()
+
+    def set_release_at(self, receipt_id: int, release_at: float) -> None:
+        """Force the moment postage may be bought. 0 means immediately."""
+        self.conn.execute(
+            "UPDATE orders SET release_at = ? WHERE receipt_id = ?",
+            (release_at, receipt_id),
+        )
+        self.conn.commit()
+
+    def claim_releasing(self, receipt_id: int, note: str) -> bool:
+        """Move new/waiting -> releasing. False if another process owns it."""
+        self._begin_immediate()
+        try:
+            row = self.conn.execute(
+                "SELECT state FROM orders WHERE receipt_id = ?", (receipt_id,)
+            ).fetchone()
+            if row is None or row["state"] not in ("new", "waiting"):
+                self.conn.commit()
+                return False
+            self.conn.execute(
+                "UPDATE orders SET state = 'releasing', updated_at = ? WHERE receipt_id = ?",
+                (time.time(), receipt_id),
+            )
+            self._log_event(receipt_id, row["state"], "releasing", note)
+            self.conn.commit()
+            return True
+        except Exception:
+            self.conn.rollback()
+            raise
+
+    def claim_stale_release(self, receipt_id: int, stale_before: float) -> bool:
+        """Take over a release whose owner has gone quiet.
+
+        `stale_before` is a timestamp: an in-flight release touched more
+        recently than that still belongs to the other process.
+        """
+        self._begin_immediate()
+        try:
+            row = self.conn.execute(
+                "SELECT state, updated_at FROM orders WHERE receipt_id = ?",
+                (receipt_id,),
+            ).fetchone()
+            if (
+                row is None
+                or row["state"] != "releasing"
+                or row["updated_at"] is None
+                or row["updated_at"] >= stale_before
+            ):
+                self.conn.commit()
+                return False
+            self.conn.execute(
+                "UPDATE orders SET updated_at = ? WHERE receipt_id = ?",
+                (time.time(), receipt_id),
+            )
+            self._log_event(
+                receipt_id,
+                "releasing",
+                "releasing",
+                "resuming label release after a restart",
+            )
+            self.conn.commit()
+            return True
+        except Exception:
+            self.conn.rollback()
+            raise
+
     def note(self, receipt_id: int, note: str) -> None:
         """Record something that happened to an order without moving it.
 
@@ -213,13 +366,28 @@ class Store:
         )
         self.conn.commit()
 
-    def label_attempted(self, receipt_id: int) -> bool:
-        return (
-            self.conn.execute(
-                "SELECT 1 FROM label_attempts WHERE receipt_id = ?", (receipt_id,)
-            ).fetchone()
-            is not None
+    def claim_label_attempt(self, receipt_id: int) -> bool:
+        """Record that a purchase is starting. False if one was already claimed.
+
+        One statement, so two processes cannot both pass the check and both
+        pay Shippo. The loser must not buy.
+        """
+        cur = self.conn.execute(
+            "INSERT OR IGNORE INTO label_attempts (receipt_id, at) VALUES (?, ?)",
+            (receipt_id, time.time()),
         )
+        self.conn.commit()
+        return cur.rowcount == 1
+
+    def label_attempted(self, receipt_id: int) -> bool:
+        return self.label_attempt_at(receipt_id) is not None
+
+    def label_attempt_at(self, receipt_id: int) -> float | None:
+        """When a purchase was claimed, or None if it never was."""
+        row = self.conn.execute(
+            "SELECT at FROM label_attempts WHERE receipt_id = ?", (receipt_id,)
+        ).fetchone()
+        return None if row is None else float(row["at"])
 
     def clear_label_attempt(self, receipt_id: int) -> None:
         self.conn.execute("DELETE FROM label_attempts WHERE receipt_id = ?", (receipt_id,))
@@ -296,3 +464,17 @@ class Store:
             "INSERT INTO events (receipt_id, at, from_state, to_state, note) VALUES (?, ?, ?, ?, ?)",
             (receipt_id, time.time(), from_state, to_state, note),
         )
+
+
+def placed_timestamp(receipt: dict, fallback: float) -> float:
+    """When the buyer placed the order, else when we first saw it.
+
+    The delay is measured from placement, so a poller that was off does not
+    add a second wait on top of the time the order already sat. A missing
+    or unusable timestamp falls back to first-seen, which is the only clock
+    we have.
+    """
+    ts = receipt.get("created_timestamp")
+    if isinstance(ts, (int, float)) and not isinstance(ts, bool) and ts > 0:
+        return float(ts)
+    return float(fallback)

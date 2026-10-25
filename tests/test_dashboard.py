@@ -648,6 +648,102 @@ def test_the_buttons_run_mark_shipped(client, monkeypatch, form, expected):
     assert ran and ran[-1][-len(expected):] == expected
 
 
+def test_delay_form_defaults_to_zero(client):
+    text = client.get("/orders").get_data(as_text=True)
+    assert "Waiting to print" in text
+    assert 'name="amount"' in text
+    assert 'value="0"' in text
+    assert "No orders are waiting." in text
+
+
+def test_delay_setting_persists_and_redisplays(client, app_dir):
+    resp = client.post(
+        "/orders/delay", data={"amount": "2", "unit": "hours"}, follow_redirects=True,
+    )
+    text = resp.get_data(as_text=True)
+    assert "2 hours" in text
+    from etsy_auto_print.store import Store
+
+    store = Store(app_dir / "orders.db")
+    assert store.get_meta("label_delay_amount") == "2"
+    assert store.get_meta("label_delay_unit") == "hours"
+    store.close()
+    again = client.get("/orders").get_data(as_text=True)
+    assert 'value="2"' in again
+    assert 'value="hours" selected' in again
+
+
+@pytest.mark.parametrize("amount,unit,phrase", [
+    ("nope", "minutes", "whole number"),
+    ("-3", "minutes", "negative"),
+    ("400", "hours", "14 days"),
+    ("1", "weeks", "minutes or hours"),
+])
+def test_delay_rejects_bad_input(client, app_dir, amount, unit, phrase):
+    resp = client.post(
+        "/orders/delay", data={"amount": amount, "unit": unit}, follow_redirects=True,
+    )
+    assert phrase in resp.get_data(as_text=True).lower()
+    from etsy_auto_print.store import Store
+
+    store = Store(app_dir / "orders.db")
+    assert store.get_meta("label_delay_amount") is None
+    store.close()
+
+
+def test_waiting_order_shows_countdown_and_buttons(client, app_dir):
+    import time
+
+    from etsy_auto_print.pipeline import set_label_delay
+    from etsy_auto_print.store import Store
+
+    placed = time.time()
+    store = Store(app_dir / "orders.db")
+    set_label_delay(store, 2, "hours")
+    store.register({
+        "receipt_id": 4242,
+        "name": "Waiting Buyer",
+        "created_timestamp": placed,
+        "transactions": [],
+    })
+    store.transition(4242, "waiting", "holding until later before buying postage")
+    store.close()
+
+    text = client.get("/orders").get_data(as_text=True)
+    assert "4242" in text
+    assert "Waiting Buyer" in text
+    assert "Print now" in text
+    assert "Skip" in text
+    assert "data-release=" in text
+    # The countdown is rendered for a browser with JavaScript off, too.
+    assert "in 1h" in text or "in 2h" in text
+
+
+@pytest.mark.parametrize("action,tail", [
+    ("print-now", ["print-now", "4242"]),
+    ("skip", ["skip", "4242"]),
+])
+def test_waiting_buttons_run_the_matching_command(client, monkeypatch, action, tail):
+    ran = []
+    monkeypatch.setattr(
+        dashboard.checks, "_run",
+        lambda cmd, timeout=10: (ran.append(cmd), (0, "ok"))[1],
+    )
+    client.post(f"/action/{action}", data={"receipt_id": "4242"})
+    assert ran and ran[-1][-len(tail):] == tail
+
+
+def test_waiting_buttons_refuse_a_bad_order_number(client, monkeypatch):
+    ran = []
+    monkeypatch.setattr(
+        dashboard.checks, "_run",
+        lambda cmd, timeout=10: (ran.append(cmd), (0, ""))[1],
+    )
+    client.post("/action/print-now", data={"receipt_id": "1; rm -rf /"}, follow_redirects=True)
+    client.post("/action/skip", data={"receipt_id": "nope"}, follow_redirects=True)
+    assert not [cmd for cmd in ran if "print-now" in cmd or "skip" in cmd]
+
+
 def test_a_bad_order_number_is_refused(client, monkeypatch):
     ran = []
     monkeypatch.setattr(dashboard.checks, "_run",

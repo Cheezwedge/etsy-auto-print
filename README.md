@@ -12,6 +12,12 @@ it works internally.
   Etsy for paid-but-unshipped orders on a timer — every 3 minutes by default
   (`poll.interval_seconds`). A new order is picked up within one interval, not
   the moment it is placed.
+- **Postage can wait.** By default a label is bought on the same poll that
+  first sees the order. To leave a window for a cancellation or an address
+  change, set a delay — see [Label delay](#label-delay) below. When the wait
+  ends the order is read from Etsy again, and it is skipped (the reason is
+  logged) if it was cancelled, refunded, already shipped, or already has a
+  label. `0` keeps today's behavior.
 - **Postage comes from Shippo, not Etsy.** You need a free
   [Shippo](https://goshippo.com) account with a card on file; labels are
   charged there, not deducted from your Etsy payment account, and Shippo's
@@ -111,7 +117,35 @@ etsy-auto-print check       # health-check every connection (exit 1 if broken)
 etsy-auto-print show 123    # details + event history for one order
 etsy-auto-print reprint 123 # re-print a slip (also un-holds a held order)
 etsy-auto-print dashboard   # web UI: status, config/products, logs, tests
+etsy-auto-print update      # pull, install, restart the poller and the dashboard
 ```
+
+### Updating the Pi
+
+One command pulls the latest code, installs any dependency changes, and
+restarts **both** the poller and the dashboard. The dashboard is installed
+as a systemd service the first time (enabled at boot, restarted by systemd
+if it crashes), so later updates restart it the same way as the poller.
+
+The restart does not cut off a postage purchase or a print. The poller
+finishes the order it is already on, and the updater waits until nothing is
+mid-purchase before it asks either service to stop. Running it again is safe.
+
+The first time — the command is not on the Pi until this version is pulled:
+
+```bash
+cd ~/etsy-auto-print && git pull && ./update.sh
+```
+
+Every time after, from any directory:
+
+```bash
+etsy-auto-print update
+```
+
+That prints a line like `Updated etsy-auto-print to 0.1.0 (abc1234). git rev-parse --short HEAD is abc1234; the dashboard header shows 0.1.0 (abc1234).` Reload the dashboard. The version in the header is that same text. `0.1.0 (abc1234, modified)` means the checkout has local edits, and the header will say so too.
+
+`~/etsy-auto-print/update.sh` is the same command, if `etsy-auto-print` is not on your PATH.
 
 ### Dashboard
 
@@ -134,6 +168,36 @@ service (config is read at startup, so changes are inert until then) and
 drops you on Status with a checklist of what to verify. See
 [docs/RASPBERRY_PI.md](docs/RASPBERRY_PI.md) for the one-line sudoers rule
 that lets the restart button work without a password.
+
+### Label delay
+
+On the **Orders** page, **Waiting to print** has the delay: a number, and
+minutes or hours. **Save delay** stores it in `orders.db`. The poller reads
+that value on every poll, so you do not restart anything to change it, and
+it is still there after a reboot. **0** (the default, until you save
+something else) buys and prints on the next poll, which is the behavior this
+program has always had.
+
+Until you save a value on that page, `poll.label_delay_minutes` in
+`config.toml` is the delay. That one is read when the poller starts, so
+changing the file needs a restart. Saving on the Orders page overrides it.
+
+An order inside the wait is listed there with a countdown.
+
+- **Print now** re-reads the order, then buys postage and prints immediately.
+- **Skip** drops it. Nothing is bought and nothing is printed.
+
+When the countdown reaches zero the poller re-reads the order before it
+spends anything. Cancelled, refunded, already shipped, or already labeled:
+it is marked done and the reason is written to the log and the order's
+history (`etsy-auto-print show <id>`, or the service log). A Pi restart in
+the middle of the wait does not forget the order and does not buy postage
+twice — the wait and any purchase already started are in `orders.db`.
+
+```toml
+[poll]
+label_delay_minutes = 30   # used only until the Orders page saves a delay
+```
 
 ### 5. Enable shipping labels (phase 2)
 
@@ -293,6 +357,10 @@ guide in [docs/RASPBERRY_PI.md](docs/RASPBERRY_PI.md).
 - Anything that fails moves to `held` with a reason (`status` shows it) and
   is retried only when you say so (`retry`).
 - Every state change is recorded in an audit trail (`show <id>`).
+- A label delay is stored in that same database, measured from when the
+  buyer placed the order. Restarting mid-wait resumes the same countdown.
+  Postage is claimed in the database before Shippo is charged, so a second
+  process (or a second poll after a crash) cannot buy the label again.
 
 ### Secrets
 

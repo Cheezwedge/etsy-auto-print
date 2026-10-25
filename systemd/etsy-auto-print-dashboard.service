@@ -1,0 +1,28 @@
+# REFERENCE ONLY — don't edit this file. It hardcodes "pi" and /home/pi, so
+# editing it in place leaves the working tree permanently dirty and conflicts
+# on the next `git pull`.
+#
+# Install with the script instead. It fills in your real user and paths and
+# writes straight to /etc/systemd/system, never touching the repo.
+# `./update.sh` runs that install for you when this service is missing.
+#
+#   ./systemd/install-service.sh dashboard
+#   ./systemd/install-service.sh dashboard --print
+[Unit]
+Description=Etsy auto-print web dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/etsy-auto-print
+ExecStart=/home/pi/etsy-auto-print/.venv/bin/etsy-auto-print dashboard
+Restart=on-failure
+RestartSec=30
+# Stop waits this long before killing the process. The updater does not
+# restart the dashboard while a Print now purchase or print is in progress.
+TimeoutStopSec=300
+
+[Install]
+WantedBy=multi-user.target

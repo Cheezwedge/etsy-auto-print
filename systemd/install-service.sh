@@ -11,18 +11,22 @@
 #   ./systemd/install-service.sh              # the order poller
 #   ./systemd/install-service.sh dashboard    # the web dashboard
 #   ./systemd/install-service.sh run --print  # show the unit, install nothing
+#   ./systemd/install-service.sh dashboard --no-restart
+#                                             # install and enable, don't restart
 
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMMAND="run"
 PRINT_ONLY=""
+NO_RESTART=""
 
 for arg in "$@"; do
     case "$arg" in
         run|dashboard) COMMAND="$arg" ;;
         --print) PRINT_ONLY=1 ;;
-        *) echo "Usage: $0 [run|dashboard] [--print]" >&2; exit 2 ;;
+        --no-restart) NO_RESTART=1 ;;
+        *) echo "Usage: $0 [run|dashboard] [--print] [--no-restart]" >&2; exit 2 ;;
     esac
 done
 
@@ -60,6 +64,10 @@ WorkingDirectory=$REPO
 ExecStart=$BINARY $COMMAND
 Restart=on-failure
 RestartSec=30
+# systemctl restart sends SIGTERM. The poller finishes the order it is
+# already buying or printing, then exits. This is how long to wait before
+# killing it — long enough for a slow postage purchase plus the printer.
+TimeoutStopSec=300
 
 [Install]
 WantedBy=multi-user.target
@@ -96,7 +104,10 @@ sudo systemctl daemon-reload
 # a malformed sudoers file can lock you out of sudo entirely.
 SYSTEMCTL="$(command -v systemctl)"
 SUDOERS=/etc/sudoers.d/etsy-auto-print
-RULE="$RUN_USER ALL=(root) NOPASSWD: $SYSTEMCTL restart etsy-auto-print, $SYSTEMCTL restart --no-block etsy-auto-print-dashboard"
+# sudo matches the command line exactly. The dashboard button uses
+# --no-block; `update.sh` uses a plain restart so it can see that the
+# service actually came back.
+RULE="$RUN_USER ALL=(root) NOPASSWD: $SYSTEMCTL restart etsy-auto-print, $SYSTEMCTL restart etsy-auto-print-dashboard, $SYSTEMCTL restart --no-block etsy-auto-print-dashboard"
 RULE_FILE="$(mktemp)"
 printf '%s\n' "$RULE" > "$RULE_FILE"
 if sudo visudo -cf "$RULE_FILE" >/dev/null; then
@@ -107,8 +118,21 @@ else
 fi
 rm -f "$RULE_FILE"
 
+sudo systemctl enable "$NAME"
+
+if [ -n "$NO_RESTART" ]; then
+    echo
+    echo "Installed $TARGET (enabled, not restarted)"
+    echo "  user:    $RUN_USER"
+    echo "  command: $BINARY $COMMAND"
+    echo "  sudo:    $SUDO_NOTE"
+    exit 0
+fi
+
 # A dashboard started by the desktop launcher holds port 8765, which stops
 # the service from starting at all. Say so rather than leave it crash-looping.
+# Skipped for --no-restart: update.sh stops that copy only after any Print
+# now purchase has finished.
 if [ "$COMMAND" = "dashboard" ] && pgrep -u "$RUN_USER" -f "etsy-auto-print dashboard" >/dev/null \
         && ! systemctl is-active --quiet "$NAME"; then
     echo "Note: a dashboard is already running outside the service (probably the"
@@ -117,7 +141,6 @@ if [ "$COMMAND" = "dashboard" ] && pgrep -u "$RUN_USER" -f "etsy-auto-print dash
     sleep 1
 fi
 
-sudo systemctl enable "$NAME"
 sudo systemctl restart "$NAME"
 
 echo

@@ -53,6 +53,7 @@ from .config import (
     load_config,
 )
 from .notify import Notifier
+from .pipeline import delay_phrase, describe_delay, format_countdown, release_timestamp, set_label_delay, waiting_to_print
 from .pdf2zpl import PdfConvertError
 from .printer import PrintError, get_printer, prepare_for_label_queue
 from .slip import render_packing_slip
@@ -123,7 +124,13 @@ border:1px solid var(--line);background:var(--card);color:var(--ink);text-decora
 display:inline-block}
 button.primary{background:var(--accent);color:#fff;border-color:transparent}
 button:hover,.btn:hover{border-color:var(--accent)}
+select{padding:6px 8px;border:1px solid var(--line);border-radius:5px;
+background:var(--bg);color:var(--ink);font:14px inherit}
 .row{display:flex;gap:9px;flex-wrap:wrap;align-items:center;margin-top:12px}
+.actions{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.actions form{margin:0}
+.countdown{font-variant-numeric:tabular-nums;font-weight:600}
+.state-waiting{color:var(--warn);font-weight:600}
 .flash{padding:11px 14px;border-radius:8px;margin-bottom:12px;font-size:14px}
 .flash.ok{background:var(--okbg);border:1px solid var(--ok)}
 .flash.err{background:var(--failbg);border:1px solid var(--fail)}
@@ -234,6 +241,80 @@ STATUS = """
 
 ORDERS = """
 <div class="card">
+  <h2>Waiting to print <span class="pill">{{ delayed|length }}</span></h2>
+  <p class="muted">Postage is bought when this delay ends, after a fresh check
+     that the order was not cancelled, refunded, already shipped, or already
+     labeled. <b>0</b> prints on the next poll, as before. The value is stored
+     with your orders, so it survives a restart and the poller picks it up
+     without one.</p>
+  <form method="post" action="{{ url_for('set_label_delay') }}">
+    <div class="row" style="margin-top:0">
+      <label>Wait
+        <input name="amount" type="number" min="0" step="1" required
+               value="{{ delay_amount }}" inputmode="numeric"
+               style="width:5.5em">
+      </label>
+      <select name="unit" aria-label="Delay unit">
+        <option value="minutes" {{ 'selected' if delay_unit == 'minutes' else '' }}>minutes</option>
+        <option value="hours" {{ 'selected' if delay_unit == 'hours' else '' }}>hours</option>
+      </select>
+      <button type="submit">Save delay</button>
+    </div>
+  </form>
+  {% if not delayed %}
+  <p class="muted">No orders are waiting.</p>
+  {% else %}
+  <div class="wrap"><table>
+    <tr><th>Order</th><th>Buyer</th><th>Prints</th><th></th></tr>
+    {% for w in delayed %}
+    <tr>
+      <td>{{ w.receipt_id }}</td>
+      <td>{{ w.buyer }}</td>
+      <td class="countdown"{% if w.state == 'waiting' %} data-release="{{ w.release_at }}"{% endif %}>{{ w.countdown }}</td>
+      <td>
+        {% if w.detail %}<div class="muted">{{ w.detail }}</div>{% endif %}
+        {% if w.state == 'waiting' %}
+        <div class="actions">
+          <form method="post" action="{{ url_for('action', name='print-now') }}"
+                onsubmit="return confirm('Buy postage and print order #{{ w.receipt_id }} now?')">
+            <input type="hidden" name="receipt_id" value="{{ w.receipt_id }}">
+            <button class="primary">Print now</button>
+          </form>
+          <form method="post" action="{{ url_for('action', name='skip') }}"
+                onsubmit="return confirm('Skip order #{{ w.receipt_id }}? No postage will be bought and nothing will print.')">
+            <input type="hidden" name="receipt_id" value="{{ w.receipt_id }}">
+            <button>Skip</button>
+          </form>
+        </div>
+        {% else %}
+        <span class="muted">printing…</span>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table></div>
+  <script>
+  function formatCountdown(seconds){
+    if(seconds<=0) return "due now";
+    var h=Math.floor(seconds/3600), m=Math.floor((seconds%3600)/60), s=seconds%60;
+    if(h) return "in "+h+"h "+String(m).padStart(2,"0")+"m";
+    if(m) return "in "+m+"m "+String(s).padStart(2,"0")+"s";
+    return "in "+s+"s";
+  }
+  function tickCountdowns(){
+    var now=Date.now()/1000;
+    document.querySelectorAll(".countdown[data-release]").forEach(function(el){
+      var left=Math.round(parseFloat(el.dataset.release)-now);
+      el.textContent=formatCountdown(left);
+    });
+  }
+  tickCountdowns();
+  setInterval(tickCountdowns, 1000);
+  </script>
+  {% endif %}
+</div>
+
+<div class="card">
   <h2>Orders <span class="pill">{{ rows|length }}</span></h2>
   {% if waiting %}
   <div class="row" style="margin:0 0 12px">
@@ -254,7 +335,7 @@ ORDERS = """
       <td class="state-{{ r.state }}">{{ r.state }}</td>
       <td>{{ r.buyer or '?' }}</td>
       <td class="muted">{{ r.updated }}</td>
-      <td class="muted">{{ r.error or r.ships or '' }}</td>
+      <td class="muted">{{ r.error or r.ships or r.countdown or '' }}</td>
       <td>
         {% if r.ships %}
         <form method="post" action="{{ url_for('action', name='mark-shipped') }}">
@@ -492,14 +573,27 @@ def create_app(config_path: Path, password: str | None = None) -> Flask:
     def orders():
         rows = []
         waiting = 0
+        delayed = []
+        delay_amount, delay_unit = 0, "minutes"
         try:
             config = cfg()
             store = Store(config.db_path)
+            delay_amount, delay_unit, delay_seconds = describe_delay(
+                store, config.label_delay_minutes
+            )
+            now_ts = datetime.now().timestamp()
+            delayed = waiting_to_print(store, delay_seconds, now_ts)
             for r in store.all_orders():
                 ships = ""
                 if r["state"] == "label_printed":
                     ships = _ship_note(store, r["receipt_id"], config)
                     waiting += bool(ships)
+                countdown = ""
+                if r["state"] == "waiting":
+                    remaining = int(release_timestamp(r, delay_seconds) - now_ts)
+                    countdown = "due now" if remaining <= 0 else format_countdown(remaining)
+                elif r["state"] == "releasing":
+                    countdown = "printing…"
                 rows.append({
                     "receipt_id": r["receipt_id"],
                     "state": r["state"],
@@ -507,13 +601,49 @@ def create_app(config_path: Path, password: str | None = None) -> Flask:
                     "updated": datetime.fromtimestamp(r["updated_at"]).strftime("%m-%d %H:%M"),
                     "error": r["error"],
                     "ships": ships,
+                    "countdown": countdown,
                 })
             rows.reverse()
         except Exception as exc:
             flash(f"Could not read orders: {exc}", "err")
         return page(ORDERS, "Orders", "orders", rows=rows, waiting=waiting,
+                    delayed=delayed, delay_amount=delay_amount, delay_unit=delay_unit,
                     max_upload_mb=MAX_UPLOAD_BYTES // (1024 * 1024),
                     output=session.pop("output", None))
+
+    @app.route("/orders/delay", methods=["POST"], endpoint="set_label_delay")
+    @protected
+    def set_label_delay_view():
+        try:
+            config = cfg()
+        except ConfigError as exc:
+            flash(str(exc), "err")
+            return redirect(url_for("orders"))
+        raw = request.form.get("amount", "").strip()
+        unit = request.form.get("unit", "minutes")
+        try:
+            amount = int(raw)
+        except ValueError:
+            flash("Delay must be a whole number of minutes or hours.", "err")
+            return redirect(url_for("orders"))
+        store = Store(config.db_path)
+        try:
+            try:
+                seconds = set_label_delay(store, amount, unit)
+            except ValueError as exc:
+                flash(str(exc), "err")
+                return redirect(url_for("orders"))
+        finally:
+            store.close()
+        if seconds == 0:
+            flash("Label delay is off — orders print on the next poll.", "ok")
+        else:
+            flash(
+                f"Label delay set to {delay_phrase(amount, unit)}. "
+                "It applies on the next poll.",
+                "ok",
+            )
+        return redirect(url_for("orders"))
 
     @app.route("/print-label", methods=["POST"])
     @protected
@@ -1025,6 +1155,11 @@ def _do_action(name: str, config_path: Path, form) -> str:
         if not rid.isdigit():
             raise ValueError("bad receipt id")
         cmd = base + ["retry", rid]
+    elif name in ("print-now", "skip"):
+        rid = form.get("receipt_id", "").strip()
+        if not rid.isdigit():
+            raise ValueError("bad receipt id")
+        cmd = base + [name, rid]
     elif name == "mark-shipped":
         if form.get("all"):
             cmd = base + ["mark-shipped", "--all"]
