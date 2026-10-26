@@ -42,6 +42,7 @@ from .labels import (
     Labeler,
     build_address_to,
     compute_parcel,
+    format_ounces,
     label_metadata,
     pick_rate,
     required_service,
@@ -329,17 +330,23 @@ def cmd_products(config, args) -> int:
     default = labels.default_parcel or (
         next(iter(labels.parcels)) if len(labels.parcels) == 1 else None
     )
-    print(f"{'SKU':<28}{'WEIGHT (OZ)':<14}BOX")
+    print(f"{'SKU':<28}{'ITEM OZ':<12}{'LABEL OZ':<12}BOX")
     for sku in sorted(labels.item_weights_oz):
         preset = labels.item_parcels.get(sku) or default or "(unset — will hold)"
-        box = labels.parcels.get(preset)
-        dims = (f"{preset}  {box['length_in']}x{box['width_in']}x{box['height_in']} in"
-                if box else preset)
-        print(f"{sku[:26]:<28}{labels.item_weights_oz[sku]:<14}{dims}")
+        box = labels.parcels.get(preset) if isinstance(preset, str) else None
+        item = labels.item_weights_oz[sku]
+        if box:
+            label_oz = format_ounces(item + box["packaging_oz"])
+            dims = f"{preset}  {box['length_in']}x{box['width_in']}x{box['height_in']} in"
+        else:
+            label_oz = "—"
+            dims = preset
+        print(f"{sku[:26]:<28}{item:<12}{label_oz:<12}{dims}")
     print(
-        f"\n{len(labels.item_weights_oz)} product(s). Weight is per item SOLD — "
+        f"\n{len(labels.item_weights_oz)} product(s). Item oz is per item SOLD — "
         "for a multi-pack listing that's the whole pack, not one unit."
-        "\nThe box adds its own packaging_oz on top."
+        "\nLabel oz is one item plus that box's empty weight. A larger order "
+        "may step up to another box, which brings its own empty weight."
     )
     return 0
 

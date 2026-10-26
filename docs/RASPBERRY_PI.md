@@ -256,7 +256,15 @@ until you press **Save**.
 
 Only `sku` and `weight_oz` really matter: the SKU must match the SKU on the
 Etsy listing exactly, and the weight is what the carrier gets billed on.
-Leave `parcel` blank to use the default box.
+**Box** is a dropdown of the types on the **Packaging** tab (name, inches,
+empty weight in ounces, max items). Leave it on **Default** to use the
+default box. **Label (1)** is that product's weight plus the empty box, for
+a single item. An order's real total — including a mix of products or a
+step up to a larger box — is on the Orders tab.
+
+The same boxes can still be written as `[labels.parcels.<name>]` in
+`config.toml`. A file you already have keeps working; you do not need to
+rewrite it before using the Packaging tab.
 
 ### After adding products — what to test
 

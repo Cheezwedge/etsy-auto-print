@@ -50,8 +50,28 @@ from .config import (
     CSV_SKU_COLUMNS,
     CSV_WEIGHT_COLUMNS,
     ConfigError,
+    _pick_column,
     load_config,
 )
+from .config_form import (
+    FILE_TYPES,
+    PRINTER_BACKENDS,
+    SLIP_FORMATS,
+    SettingsError,
+    apply_boxes,
+    apply_settings,
+    boxes_from_labels,
+    choice_list,
+    default_parcel_from_labels,
+    parcel_table_names,
+    parse_boxes,
+    provider_choices,
+    read_settings,
+    rows_from_box_form,
+    sync_item_parcels,
+)
+from .labels import LabelError, format_ounces, plan_parcel
+from .shipdate import POLICIES
 from .notify import Notifier
 from .pipeline import delay_phrase, describe_delay, format_countdown, release_timestamp, set_label_delay, waiting_to_print
 from .pdf2zpl import PdfConvertError
@@ -113,8 +133,16 @@ table{width:100%;border-collapse:collapse;font-size:14px}
 th{text-align:left;color:var(--sub);font-weight:600;font-size:12px;
 text-transform:uppercase;letter-spacing:.05em;padding:6px 8px;border-bottom:1px solid var(--line)}
 td{padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:middle}
-td input{width:100%;padding:6px 8px;border:1px solid var(--line);border-radius:5px;
+td input,td select{width:100%;padding:6px 8px;border:1px solid var(--line);border-radius:5px;
 background:var(--bg);color:var(--ink);font:14px inherit}
+fieldset{border:1px solid var(--line);border-radius:8px;margin:0 0 14px;padding:12px 14px}
+legend{font-weight:600;font-size:13px;padding:0 6px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px 14px}
+.grid label{display:flex;flex-direction:column;gap:3px;font-size:13px;color:var(--sub);font-weight:600}
+.grid input,.grid select{font-weight:400;width:100%}
+.grid input[type=checkbox],.checks input{width:auto}
+.checks{display:flex;flex-wrap:wrap;gap:8px 16px;margin:6px 0 2px}
+.checks label{font-weight:500;color:var(--ink);display:flex;gap:6px;align-items:center}
 .wrap{overflow-x:auto}
 textarea{width:100%;min-height:460px;padding:12px;border:1px solid var(--line);
 border-radius:8px;background:var(--bg);color:var(--ink);
@@ -148,6 +176,7 @@ border:1px solid var(--line);color:var(--sub)}
     <a href="{{ url_for('status') }}" class="{{ 'on' if page=='status' }}">Status</a>
     <a href="{{ url_for('orders') }}" class="{{ 'on' if page=='orders' }}">Orders</a>
     <a href="{{ url_for('items') }}" class="{{ 'on' if page=='items' }}">Products</a>
+    <a href="{{ url_for('packaging') }}" class="{{ 'on' if page=='packaging' }}">Packaging</a>
     <a href="{{ url_for('config_edit') }}" class="{{ 'on' if page=='config' }}">Config</a>
     <a href="{{ url_for('logs') }}" class="{{ 'on' if page=='logs' }}">Logs</a>
   </nav>
@@ -190,7 +219,7 @@ CHECKLIST = """
         LIVE = real money).</li>
     <li><b>Printer</b> is green, then hit <b>Print test label</b> above and confirm a
         physical label comes out complete.</li>
-    {% if what in ("products", "config") %}
+    {% if what in ("products", "config", "packaging") %}
     <li><b>Weights and boxes</b>: run <code>quote &lt;order-id&gt;</code> on a real
         order to see what a label would cost and which box it picks — it buys
         nothing.</li>
@@ -328,7 +357,7 @@ ORDERS = """
   {% endif %}
   {% if not rows %}<p class="muted">No orders recorded yet.</p>{% else %}
   <div class="wrap"><table>
-    <tr><th>Order</th><th>State</th><th>Buyer</th><th>Updated</th><th>Note</th><th></th></tr>
+    <tr><th>Order</th><th>State</th><th>Buyer</th><th>Updated</th><th>Note</th><th>Weight</th><th></th></tr>
     {% for r in rows %}
     <tr>
       <td>{{ r.receipt_id }}</td>
@@ -336,6 +365,7 @@ ORDERS = """
       <td>{{ r.buyer or '?' }}</td>
       <td class="muted">{{ r.updated }}</td>
       <td class="muted">{{ r.error or r.ships or r.countdown or '' }}</td>
+      <td class="muted">{{ r.parcel or '' }}</td>
       <td>
         {% if r.ships %}
         <form method="post" action="{{ url_for('action', name='mark-shipped') }}">
@@ -377,28 +407,40 @@ ITEMS = """
 <div class="card">
   <h2>Products</h2>
   {% if not csv_path %}
-    <p class="muted">No spreadsheet configured. Add
-      <code>items_csv = "items.csv"</code> under <code>[labels]</code> in Config,
+    <p class="muted">No spreadsheet configured. Set <b>Products file</b> to
+      <code>items.csv</code> on the Config tab (or add
+      <code>items_csv = "items.csv"</code> under <code>[labels]</code>),
       then reload this page to edit products here.</p>
   {% else %}
   <p class="muted">Editing <code>{{ csv_path }}</code>. The <b>sku</b> must match the SKU
-     on the Etsy listing. Leave <b>parcel</b> blank to use the default box.</p>
+     on the Etsy listing. <b>Box</b> is one of the types on the Packaging tab.
+     <b>Default</b> uses {% if default_parcel %}<b>{{ default_parcel }}</b>{% else %}whatever is set as the default box{% endif %}.
+     <b>Label (1)</b> is this product's weight plus that box's empty weight, for a single item.
+     An order with more pieces, or a mix of products, can ship in a different box — the total for that order is on the Orders tab.</p>
   <form method="post">
     <div class="wrap"><table id="tbl">
-      <tr><th>SKU</th><th>Weight (oz)</th><th>Parcel</th><th>Notes</th><th></th></tr>
+      <tr><th>SKU</th><th>Weight (oz)</th><th>Box</th><th>Label (1)</th><th>Notes</th><th></th></tr>
       {% for row in rows %}
       <tr>
         <td><input name="sku" value="{{ row.sku }}"></td>
         <td><input name="weight_oz" value="{{ row.weight_oz }}" inputmode="decimal"></td>
-        <td><input name="parcel" value="{{ row.parcel }}" list="parcels"></td>
+        <td>
+          <select name="parcel" class="parcel">
+            <option value="" {{ 'selected' if not row.parcel }}>Default{% if default_parcel %} ({{ default_parcel }}){% endif %}</option>
+            {% for p in parcel_names %}
+            <option value="{{ p }}" {{ 'selected' if row.parcel == p }}>{{ p }}</option>
+            {% endfor %}
+            {% if row.parcel and row.parcel not in parcel_names %}
+            <option value="{{ row.parcel }}" selected>{{ row.parcel }} (not a configured box)</option>
+            {% endif %}
+          </select>
+        </td>
+        <td class="label-oz muted" title="{{ row.label_title }}">{{ row.label_oz }}</td>
         <td><input name="notes" value="{{ row.notes }}"></td>
-        <td><button type="button" onclick="this.closest('tr').remove()">✕</button></td>
+        <td><button type="button" onclick="this.closest('tr').remove(); refreshLabels()">✕</button></td>
       </tr>
       {% endfor %}
     </table></div>
-    <datalist id="parcels">
-      {% for p in parcel_names %}<option value="{{ p }}">{% endfor %}
-    </datalist>
     <div class="row">
       <button type="button" onclick="addRow()">Add product</button>
       <button type="submit">Save</button>
@@ -431,24 +473,244 @@ ITEMS = """
 
 {% if csv_path %}
 <script>
+const PARCELS = {{ parcel_names|tojson }};
+const DEFAULT_PARCEL = {{ (default_parcel or "")|tojson }};
+const BOX_OZ = {{ box_oz|tojson }};
+function escapeHtml(s){
+  return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;");
+}
+function defaultLabel(){
+  return DEFAULT_PARCEL ? "Default ("+escapeHtml(DEFAULT_PARCEL)+")" : "Default";
+}
+function formatOz(n){
+  const rounded = Math.round(n*100)/100;
+  if(Math.abs(rounded-Math.round(rounded))<1e-9) return String(Math.round(rounded));
+  return String(rounded);
+}
+function parcelSelectHtml(){
+  let html = '<select name="parcel" class="parcel"><option value="">'+defaultLabel()+'</option>';
+  PARCELS.forEach(function(name){
+    html += '<option value="'+escapeHtml(name)+'">'+escapeHtml(name)+'</option>';
+  });
+  return html + '</select>';
+}
+function refreshLabels(){
+  const rows = document.querySelectorAll("#tbl tr");
+  rows.forEach(function(row, i){
+    if(i===0) return;
+    const weight = row.querySelector('input[name=weight_oz]');
+    const parcel = row.querySelector('[name=parcel]');
+    const out = row.querySelector('.label-oz');
+    if(!weight || !parcel || !out) return;
+    const w = parseFloat(weight.value);
+    const name = parcel.value || DEFAULT_PARCEL;
+    const box = BOX_OZ[name];
+    if(!name || !(box>=0) || !isFinite(w)){
+      out.textContent = "";
+      out.title = "";
+      return;
+    }
+    out.textContent = formatOz(w+box)+" oz";
+    out.title = formatOz(w)+" oz product + "+formatOz(box)+" oz "+name;
+  });
+}
 function addRow(){
   const t=document.getElementById('tbl');
   const r=t.insertRow(-1);
   r.innerHTML='<td><input name="sku"></td><td><input name="weight_oz" inputmode="decimal"></td>'+
-    '<td><input name="parcel" list="parcels"></td><td><input name="notes"></td>'+
-    '<td><button type="button" onclick="this.closest(\\'tr\\').remove()">✕</button></td>';
+    '<td>'+parcelSelectHtml()+'</td><td class="label-oz muted"></td><td><input name="notes"></td>'+
+    '<td><button type="button" onclick="this.closest(\\'tr\\').remove(); refreshLabels()">✕</button></td>';
   r.querySelector('input').focus();
+  refreshLabels();
 }
+document.getElementById('tbl').addEventListener('input', refreshLabels);
+document.getElementById('tbl').addEventListener('change', refreshLabels);
+refreshLabels();
 </script>
 {% endif %}
 """
 
 CONFIG = """
+{% if settings %}
+<div class="card">
+  <h2>Settings</h2>
+  <p class="muted">These edit <code>config.toml</code> directly. Tokens, the
+     shipping-upgrade name map, and anything not listed here stay in the file
+     as they are — saving this form does not change them. Boxes are on the
+     Packaging tab; which box a SKU uses is on Products.
+     Saved only if the result still validates. The previous file is kept as
+     <code>config.toml.bak</code>.</p>
+  <form method="post">
+    <input type="hidden" name="form" value="settings">
+
+    <fieldset>
+      <legend>Labels</legend>
+      <div class="checks">
+        <label><input type="hidden" name="labels_enabled" value="0">
+          <input type="checkbox" name="labels_enabled" value="1" {{ 'checked' if settings.labels_enabled }}>
+          Buy shipping labels</label>
+        <label><input type="hidden" name="allow_live" value="0">
+          <input type="checkbox" name="allow_live" value="1" {{ 'checked' if settings.allow_live }}>
+          Allow live postage (real charges)</label>
+        <label><input type="hidden" name="validate_addresses" value="0">
+          <input type="checkbox" name="validate_addresses" value="1" {{ 'checked' if settings.validate_addresses }}>
+          Validate buyer addresses</label>
+        <label><input type="hidden" name="hold_unmapped_upgrade" value="0">
+          <input type="checkbox" name="hold_unmapped_upgrade" value="1" {{ 'checked' if settings.hold_unmapped_upgrade }}>
+          Hold orders with an unmapped shipping upgrade</label>
+      </div>
+      <div class="grid" style="margin-top:10px">
+        <label>Label format
+          <select name="file_type">
+            {% for opt in file_types %}
+            <option value="{{ opt }}" {{ 'selected' if settings.file_type == opt }}>{{ opt }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>Default box
+          <select name="default_parcel">
+            <option value="" {{ 'selected' if not settings.default_parcel }}>No default (unmapped products hold)</option>
+            {% for name in parcel_names %}
+            <option value="{{ name }}" {{ 'selected' if settings.default_parcel == name }}>{{ name }}</option>
+            {% endfor %}
+            {% if settings.default_parcel and settings.default_parcel not in parcel_names %}
+            <option value="{{ settings.default_parcel }}" selected>{{ settings.default_parcel }} (missing)</option>
+            {% endif %}
+          </select>
+        </label>
+        <label>When Etsy is told it shipped
+          <select name="mark_shipped">
+            {% for opt in policies %}
+            <option value="{{ opt }}" {{ 'selected' if settings.mark_shipped == opt }}>{{ opt }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>From this hour (0–23)
+          <input name="mark_shipped_hour" type="number" min="0" max="23" required
+                 value="{{ settings.mark_shipped_hour }}">
+        </label>
+        <label>Products file
+          <input name="items_csv" value="{{ settings.items_csv }}" placeholder="items.csv">
+        </label>
+      </div>
+      <p class="muted">Carriers to consider. None checked means the cheapest rate from any carrier.</p>
+      <div class="checks">
+        {% for name in providers %}
+        <label><input type="checkbox" name="allowed_providers" value="{{ name }}"
+          {{ 'checked' if name in settings.allowed_providers }}> {{ name }}</label>
+        {% endfor %}
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Ship-from address</legend>
+      <div class="grid">
+        <label>Name <input name="ship_name" value="{{ settings.ship_name }}"></label>
+        <label>Email <input name="ship_email" value="{{ settings.ship_email }}" inputmode="email"></label>
+        <label>Street <input name="ship_street1" value="{{ settings.ship_street1 }}"></label>
+        <label>Street 2 <input name="ship_street2" value="{{ settings.ship_street2 }}"></label>
+        <label>City <input name="ship_city" value="{{ settings.ship_city }}"></label>
+        <label>State <input name="ship_state" value="{{ settings.ship_state }}"></label>
+        <label>ZIP <input name="ship_zip" value="{{ settings.ship_zip }}"></label>
+        <label>Country <input name="ship_country" value="{{ settings.ship_country }}"></label>
+        <label>Phone <input name="ship_phone" value="{{ settings.ship_phone }}"></label>
+      </div>
+      <p class="muted">Required once labels are on. USPS also requires the email. Phone is optional.</p>
+    </fieldset>
+
+    <fieldset>
+      <legend>Printer</legend>
+      <div class="grid">
+        <label>Printer
+          <select name="backend">
+            {% for opt in backends %}
+            <option value="{{ opt }}" {{ 'selected' if settings.backend == opt }}>{{ opt }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>Label queue (CUPS)
+          <input name="cups_queue" value="{{ settings.cups_queue }}" placeholder="required when printer is cups">
+        </label>
+        <label>Slip format
+          <select name="slip_format">
+            {% for opt in slip_formats %}
+            <option value="{{ opt }}" {{ 'selected' if settings.slip_format == opt }}>{{ opt }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>Slip queue
+          <input name="slip_queue" value="{{ settings.slip_queue }}" placeholder="blank prints slips to the outbox">
+        </label>
+        <label>Outbox folder
+          <input name="outbox" value="{{ settings.outbox }}" placeholder="outbox">
+        </label>
+      </div>
+      <p class="muted"><b>file</b> writes slips and labels into the outbox.
+         <b>cups</b> sends them to the label queue. Slip format <b>zpl</b> prints the
+         packing slip on that same label printer, so the slip queue must be empty.</p>
+    </fieldset>
+
+    <fieldset>
+      <legend>Polling, stock, notifications</legend>
+      <div class="grid">
+        <label>Poll every (seconds)
+          <input name="interval_seconds" type="number" min="1" max="86400" required
+                 value="{{ settings.interval_seconds }}">
+        </label>
+        <label>Label delay in config (minutes)
+          <input name="label_delay_minutes" type="number" min="0" max="20160" required
+                 value="{{ settings.label_delay_minutes }}">
+        </label>
+        <label>OAuth redirect port
+          <input name="redirect_port" type="number" min="1" max="65535" required
+                 value="{{ settings.redirect_port }}">
+        </label>
+        <label>Low-stock at
+          <input name="low_threshold" type="number" min="0" required value="{{ settings.low_threshold }}">
+        </label>
+        <label>Stock check every (minutes)
+          <input name="interval_minutes" type="number" min="5" required value="{{ settings.interval_minutes }}">
+        </label>
+      </div>
+      <div class="checks">
+        <label><input type="hidden" name="stock_enabled" value="0">
+          <input type="checkbox" name="stock_enabled" value="1" {{ 'checked' if settings.stock_enabled }}>
+          Watch listing stock</label>
+        <label><input type="hidden" name="notify_on_order" value="0">
+          <input type="checkbox" name="notify_on_order" value="1" {{ 'checked' if settings.notify_on_order }}>
+          Notify when an order prints</label>
+        <label><input type="hidden" name="listings_r" value="0">
+          <input type="checkbox" name="listings_r" value="1" {{ 'checked' if settings.listings_r }}>
+          Ask Etsy for listings_r (exact stock counts)</label>
+      </div>
+      <p class="muted">The label delay here is the fallback in <code>config.toml</code>.
+         A delay saved on the Orders page is stored with your orders and wins over this
+         number, without a restart. This one is read when the poller starts.</p>
+    </fieldset>
+
+    <div class="row">
+      <button type="submit">Validate &amp; save</button>
+      <button class="primary" type="submit" name="apply" value="1">Save &amp; apply</button>
+      <span class="muted">“Save &amp; apply” also restarts the service and re-checks status.</span>
+    </div>
+  </form>
+</div>
+{% elif parse_error %}
+<div class="card">
+  <h2>Settings</h2>
+  <p class="muted">The settings form needs the file to parse as TOML. Fix the
+     error in the editor below, save it, and the form will come back.</p>
+</div>
+{% endif %}
+
 <div class="card">
   <h2>config.toml</h2>
-  <p class="muted">Saved only if it parses and validates — a mistake here can't break the
-     running service. The previous version is kept as <code>config.toml.bak</code>.</p>
+  <p class="muted">Advanced: the whole file. Saved only if it parses and validates —
+     a mistake here can't break the running service. The previous version is kept
+     as <code>config.toml.bak</code>. Use this for API tokens, notification
+     secrets, and <code>[labels.service_map]</code>.</p>
   <form method="post">
+    <input type="hidden" name="form" value="raw">
     <textarea name="text" spellcheck="false">{{ text }}</textarea>
     <div class="row">
       <button type="submit">Validate &amp; save</button>
@@ -456,6 +718,111 @@ CONFIG = """
       <span class="muted">“Save &amp; apply” also restarts the service and re-checks status.</span>
     </div>
   </form>
+</div>
+"""
+
+PACKAGING = """
+<div class="card">
+  <h2>Packaging</h2>
+  {% if broken %}
+  <p class="muted">config.toml isn't valid TOML, so the boxes can't be read.
+     Fix it on the Config tab first.</p>
+  {% else %}
+  <p class="muted">Each row is a box type (<code>[labels.parcels.&lt;name&gt;]</code>,
+     or the single <code>[labels.parcel]</code> block when you only have one).
+     <b>Empty oz</b> is the box by itself, with nothing in it.
+     A label's weight is the sum of the product weights in the order plus the
+     empty weight of the one box chosen for that order.</p>
+  <p class="muted">An order that mixes products ships in the largest of their
+     boxes by volume. If the pieces don't fit that box's max items, the next
+     larger box that holds them is used instead — and that box's empty weight
+     is the one added, not the smaller box's. Leave max items blank for no
+     limit. A box with no limit also counts as a place smaller boxes can step
+     up into, so a special box that is larger than your small mailer will catch
+     those orders.</p>
+  <form method="post" id="box-form">
+    <div class="wrap"><table id="boxes">
+      <tr>
+        <th>Name</th><th>Length (in)</th><th>Width</th><th>Height</th>
+        <th>Empty oz</th><th>Max items</th><th></th>
+      </tr>
+      {% for box in boxes %}
+      <tr>
+        <td>
+          <input type="hidden" name="original_name" value="{{ box.original }}">
+          <input name="name" value="{{ box.name }}" required>
+        </td>
+        <td><input name="length_in" value="{{ box.length_in }}" inputmode="decimal" required></td>
+        <td><input name="width_in" value="{{ box.width_in }}" inputmode="decimal" required></td>
+        <td><input name="height_in" value="{{ box.height_in }}" inputmode="decimal" required></td>
+        <td><input name="packaging_oz" value="{{ box.packaging_oz }}" inputmode="decimal" required></td>
+        <td><input name="max_items" value="{{ box.max_items }}" inputmode="numeric" placeholder="no limit"></td>
+        <td><button type="button" onclick="this.closest('tr').remove(); syncDefault()">✕</button></td>
+      </tr>
+      {% endfor %}
+    </table></div>
+    <div class="row">
+      <label>Default box
+        <select name="default_parcel" id="default_parcel">
+          <option value="" {{ 'selected' if not default_parcel }}>No default (unmapped products hold)</option>
+          {% for box in boxes %}
+          <option value="{{ box.name }}" {{ 'selected' if default_parcel == box.name }}>{{ box.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    </div>
+    <div class="row">
+      <button type="button" onclick="addBox()">Add box</button>
+      <button type="submit">Save</button>
+      <button class="primary" type="submit" name="apply" value="1">Save &amp; apply</button>
+      <span class="muted">“Save &amp; apply” also restarts the service and re-checks status.</span>
+    </div>
+  </form>
+  <script>
+  function syncDefault(){
+    const sel = document.getElementById('default_parcel');
+    if(!sel) return;
+    const current = sel.value;
+    const pairs = Array.from(document.querySelectorAll('#boxes tr')).slice(1).map(function(row){
+      const nameEl = row.querySelector('input[name=name]');
+      const origEl = row.querySelector('input[name=original_name]');
+      return {
+        name: nameEl ? nameEl.value.trim() : "",
+        original: origEl ? origEl.value.trim() : ""
+      };
+    }).filter(function(p){ return p.name; });
+    let keep = current;
+    if(!pairs.some(function(p){ return p.name === current; })){
+      const renamed = pairs.find(function(p){ return p.original && p.original === current; });
+      keep = renamed ? renamed.name : "";
+    }
+    let html = '<option value="">No default (unmapped products hold)</option>';
+    pairs.forEach(function(p){
+      const esc = p.name.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;");
+      html += '<option value="'+esc+'"'+(p.name===keep?' selected':'')+'>'+esc+'</option>';
+    });
+    sel.innerHTML = html;
+  }
+  function addBox(){
+    const t = document.getElementById('boxes');
+    const r = t.insertRow(-1);
+    r.innerHTML = '<td><input type="hidden" name="original_name" value="">'+
+      '<input name="name" required></td>'+
+      '<td><input name="length_in" inputmode="decimal" required></td>'+
+      '<td><input name="width_in" inputmode="decimal" required></td>'+
+      '<td><input name="height_in" inputmode="decimal" required></td>'+
+      '<td><input name="packaging_oz" inputmode="decimal" required></td>'+
+      '<td><input name="max_items" inputmode="numeric" placeholder="no limit"></td>'+
+      '<td><button type="button" onclick="this.closest(\\'tr\\').remove(); syncDefault()">✕</button></td>';
+    r.querySelector('input[name=name]').focus();
+    syncDefault();
+  }
+  document.getElementById('boxes').addEventListener('input', function(ev){
+    if(ev.target && ev.target.name === 'name') syncDefault();
+  });
+  document.getElementById('box-form').addEventListener('submit', syncDefault);
+  </script>
+  {% endif %}
 </div>
 """
 
@@ -527,6 +894,46 @@ def create_app(config_path: Path, password: str | None = None) -> Flask:
                 f"Saved {what}, but the restart failed: {exc}", "err"
             )
             return redirect(url_for("status", applied=what, restarted=0))
+
+    def _commit_text(text: str, what: str):
+        """Validate, back up, and write config.toml. None if it was refused."""
+        path: Path = app.config["CONFIG_PATH"]
+        created = _ensure_items_csv(text, path)
+        if created:
+            flash(
+                f"Created {created} with a header row — add your products on "
+                "the Products tab.",
+                "ok",
+            )
+        try:
+            _validate_config_text(text, path)
+        except (ConfigError, Exception) as exc:
+            flash(f"Not saved — {exc}", "err")
+            return None
+        if path.exists():
+            path.with_suffix(path.suffix + ".bak").write_text(path.read_text())
+        _atomic_write(path, text)
+        return _finish(what)
+
+    def _render_config(text: str):
+        try:
+            raw = tomllib.loads(text) if text.strip() else {}
+        except tomllib.TOMLDecodeError:
+            return page(CONFIG, "Config", "config", text=text, settings=None, parse_error=True)
+        if not isinstance(raw, dict):
+            raw = {}
+        settings = read_settings(raw)
+        labels = raw.get("labels") if isinstance(raw.get("labels"), dict) else {}
+        names = parcel_table_names(labels)
+        return page(
+            CONFIG, "Config", "config", text=text, settings=settings, parse_error=False,
+            parcel_names=names,
+            providers=provider_choices(settings["allowed_providers"]),
+            file_types=choice_list(settings["file_type"], FILE_TYPES),
+            backends=list(PRINTER_BACKENDS),
+            slip_formats=choice_list(settings["slip_format"], SLIP_FORMATS),
+            policies=choice_list(settings["mark_shipped"], POLICIES),
+        )
 
     def protected(view):
         @wraps(view)
@@ -602,6 +1009,7 @@ def create_app(config_path: Path, password: str | None = None) -> Flask:
                     "error": r["error"],
                     "ships": ships,
                     "countdown": countdown,
+                    "parcel": _parcel_summary(config, store.get_receipt_json(r["receipt_id"])),
                 })
             rows.reverse()
         except Exception as exc:
@@ -686,13 +1094,46 @@ def create_app(config_path: Path, password: str | None = None) -> Flask:
         flash(f"Sent {upload.filename} to {destination}{detail}", "ok")
         return redirect(url_for("orders"))
 
+    def _product_context(config, toml_raw):
+        labels_raw = (toml_raw or {}).get("labels") or {}
+        if not isinstance(labels_raw, dict):
+            labels_raw = {}
+        if config is not None:
+            boxes = config.labels.parcels
+            default = config.labels.default_parcel or ""
+            mapping = config.labels.item_parcels
+            weights = config.labels.item_weights_oz
+            names = sorted(boxes)
+        else:
+            boxes = _raw_boxes(labels_raw)
+            default = default_parcel_from_labels(labels_raw)
+            mapping = labels_raw.get("item_parcels") or {}
+            weights = labels_raw.get("item_weights_oz") or {}
+            if not isinstance(mapping, dict):
+                mapping = {}
+            if not isinstance(weights, dict):
+                weights = {}
+            names = sorted(parcel_table_names(labels_raw))
+        box_oz = {
+            name: box["packaging_oz"]
+            for name, box in boxes.items()
+            if isinstance(box, dict) and box.get("packaging_oz") is not None
+        }
+        return labels_raw, boxes, default, mapping, weights, names, box_oz
+
+    def _items_page(csv_path, rows, names, default, box_oz):
+        return page(
+            ITEMS, "Products", "items", csv_path=csv_path, rows=rows,
+            parcel_names=names, default_parcel=default, box_oz=box_oz,
+        )
+
     @app.route("/items", methods=["GET", "POST"])
     @protected
     def items():
         # A bad parcel name in the CSV makes load_config fail, and this page
-        # is where you fix it — so it has to render without one. Everything
-        # below comes from raw TOML and the CSV itself; the loaded config is
-        # only needed for the box dropdown.
+        # is where you fix it — so it has to render without one. The box
+        # dropdown then comes from the raw file rather than an empty list
+        # that would blank every row's parcel on save.
         config = None
         try:
             config = cfg()
@@ -705,55 +1146,82 @@ def create_app(config_path: Path, password: str | None = None) -> Flask:
             with open(app.config["CONFIG_PATH"], "rb") as f:
                 toml_raw = tomllib.load(f)
         except (OSError, tomllib.TOMLDecodeError):
-            return page(ITEMS, "Products", "items", csv_path=None, rows=[],
-                        parcel_names=[])
-        rel = toml_raw.get("labels", {}).get("items_csv")
+            return _items_page(None, [], [], "", {})
+        labels_raw, boxes, default, mapping, weights, names, box_oz = _product_context(
+            config, toml_raw
+        )
+        rel = labels_raw.get("items_csv")
         if not rel:
-            return page(ITEMS, "Products", "items", csv_path=None, rows=[], parcel_names=[])
+            return _items_page(None, [], names, default, box_oz)
         csv_path = app.config["CONFIG_PATH"].parent / rel
 
         if request.method == "POST":
+            before = _merge_product_rows(_read_items_csv(csv_path), mapping, weights)
+            previous = {row["sku"] for row in before}
             skus = request.form.getlist("sku")
-            weights = request.form.getlist("weight_oz")
+            weights_in = request.form.getlist("weight_oz")
             parcels = request.form.getlist("parcel")
             notes = request.form.getlist("notes")
+            allowed = set(names)
             buf = io.StringIO()
             writer = csv.writer(buf, lineterminator="\n")
             writer.writerow(["sku", "weight_oz", "parcel", "notes"])
-            written = 0
+            saved: dict[str, str] = {}
             for i, sku in enumerate(skus):
                 sku = sku.strip()
                 if not sku:
                     continue
-                weight = (weights[i] if i < len(weights) else "").strip()
+                weight = (weights_in[i] if i < len(weights_in) else "").strip()
                 if weight:
                     try:
                         float(weight)
                     except ValueError:
                         flash(f"Weight {weight!r} for SKU {sku!r} is not a number.", "err")
                         return redirect(url_for("items"))
+                parcel = (parcels[i] if i < len(parcels) else "").strip()
+                if parcel and parcel not in allowed:
+                    flash(
+                        f"SKU {sku!r} is set to box {parcel!r}, which is not a "
+                        "packaging type. Pick one from the list.",
+                        "err",
+                    )
+                    return redirect(url_for("items"))
                 writer.writerow([
-                    sku, weight,
-                    (parcels[i] if i < len(parcels) else "").strip(),
+                    sku, weight, parcel,
                     (notes[i] if i < len(notes) else "").strip(),
                 ])
-                written += 1
-            _atomic_write(csv_path, buf.getvalue())
+                saved[sku] = parcel
+            new_csv = buf.getvalue()
+            old_csv = csv_path.read_text() if csv_path.exists() else None
+            _atomic_write(csv_path, new_csv)
+            path: Path = app.config["CONFIG_PATH"]
+            old_toml = path.read_text()
+            try:
+                new_toml = sync_item_parcels(old_toml, saved, previous - set(saved))
+            except (tomllib.TOMLDecodeError, Exception) as exc:
+                if old_csv is None:
+                    csv_path.unlink(missing_ok=True)
+                else:
+                    _atomic_write(csv_path, old_csv)
+                flash(f"Not saved — {exc}", "err")
+                return redirect(url_for("items"))
+            if new_toml != old_toml:
+                try:
+                    _validate_config_text(new_toml, path)
+                except (ConfigError, Exception) as exc:
+                    if old_csv is None:
+                        csv_path.unlink(missing_ok=True)
+                    else:
+                        _atomic_write(csv_path, old_csv)
+                    flash(f"Not saved — {exc}", "err")
+                    return redirect(url_for("items"))
+                path.with_suffix(path.suffix + ".bak").write_text(old_toml)
+                _atomic_write(path, new_toml)
             return _finish("products")
 
-        # Without a loaded config the box names are unknown, so offer the ones
-        # the file itself declares rather than an empty dropdown that would
-        # silently blank every row's parcel on save.
-        if config is not None:
-            parcel_names = sorted(config.labels.parcels)
-        else:
-            labels_raw = toml_raw.get("labels", {})
-            parcel_names = sorted(labels_raw.get("parcels", {}))
-            if not parcel_names and labels_raw.get("parcel"):
-                parcel_names = ["default"]
-
-        return page(ITEMS, "Products", "items", csv_path=csv_path,
-                    rows=_read_items_csv(csv_path), parcel_names=parcel_names)
+        rows = _merge_product_rows(_read_items_csv(csv_path), mapping, weights)
+        _annotate_label_preview(rows, boxes, default)
+        return _items_page(csv_path, rows, names, default, box_oz)
 
     @app.route("/items/import", methods=["POST"])
     @protected
@@ -764,13 +1232,20 @@ def create_app(config_path: Path, password: str | None = None) -> Flask:
         would be the one destructive button on the page. The rows land in the
         table, the user looks at them, and Save is still Save.
         """
+        config = None
         try:
             config = cfg()
-            with open(app.config["CONFIG_PATH"], "rb") as f:
-                rel = tomllib.load(f).get("labels", {}).get("items_csv")
         except ConfigError as exc:
             flash(str(exc), "err")
+        try:
+            with open(app.config["CONFIG_PATH"], "rb") as f:
+                toml_raw = tomllib.load(f)
+        except (OSError, tomllib.TOMLDecodeError):
             return redirect(url_for("items"))
+        labels_raw, boxes, default, mapping, weights, names, box_oz = _product_context(
+            config, toml_raw
+        )
+        rel = labels_raw.get("items_csv")
         if not rel:
             return redirect(url_for("items"))
         csv_path = app.config["CONFIG_PATH"].parent / rel
@@ -783,38 +1258,94 @@ def create_app(config_path: Path, password: str | None = None) -> Flask:
 
         rows = pasted
         if request.form.get("mode") == "append":
-            rows = _read_items_csv(csv_path) + pasted
+            rows = _merge_product_rows(_read_items_csv(csv_path), mapping, weights) + pasted
+        _annotate_label_preview(rows, boxes, default)
         flash(
             f"Loaded {len(pasted)} product(s) into the table — nothing is saved "
             "until you press Save.",
             "ok",
         )
-        return page(ITEMS, "Products", "items", csv_path=csv_path, rows=rows,
-                    parcel_names=sorted(config.labels.parcels))
+        return _items_page(csv_path, rows, names, default, box_oz)
+
+    @app.route("/packaging", methods=["GET", "POST"])
+    @protected
+    def packaging():
+        path: Path = app.config["CONFIG_PATH"]
+        labels = _read_labels_section(path)
+        if labels is None:
+            flash("config.toml is not valid TOML — fix it on the Config tab first.", "err")
+            return page(
+                PACKAGING, "Packaging", "packaging", boxes=[], default_parcel="", broken=True,
+            )
+
+        def show(boxes, default):
+            return page(
+                PACKAGING, "Packaging", "packaging",
+                boxes=boxes, default_parcel=default, broken=False,
+            )
+
+        if request.method == "POST":
+            posted_default = request.form.get("default_parcel", "")
+            try:
+                boxes, default_parcel = parse_boxes(request.form)
+            except SettingsError as exc:
+                flash(str(exc), "err")
+                return show(rows_from_box_form(request.form), posted_default)
+            text = path.read_text() if path.exists() else ""
+            try:
+                new_text, rename = apply_boxes(text, boxes, default_parcel)
+            except (SettingsError, Exception) as exc:
+                flash(f"Not saved — {exc}", "err")
+                return show(rows_from_box_form(request.form), posted_default)
+            csv_path = _items_csv_path(path, labels)
+            csv_backup = None
+            if rename and csv_path is not None and csv_path.exists():
+                csv_backup = csv_path.read_text()
+                _rename_csv_parcels(csv_path, rename)
+            try:
+                created = _ensure_items_csv(new_text, path)
+                if created:
+                    flash(
+                        f"Created {created} with a header row — add your products on "
+                        "the Products tab.",
+                        "ok",
+                    )
+                _validate_config_text(new_text, path)
+            except (ConfigError, Exception) as exc:
+                if csv_backup is not None and csv_path is not None:
+                    _atomic_write(csv_path, csv_backup)
+                flash(f"Not saved — {exc}", "err")
+                return show(rows_from_box_form(request.form), posted_default)
+            if path.exists():
+                path.with_suffix(path.suffix + ".bak").write_text(text)
+            _atomic_write(path, new_text)
+            return _finish("packaging")
+
+        return show(boxes_from_labels(labels), default_parcel_from_labels(labels))
 
     @app.route("/config", methods=["GET", "POST"])
     @protected
     def config_edit():
         path: Path = app.config["CONFIG_PATH"]
         if request.method == "POST":
+            if request.form.get("form") == "settings":
+                current = path.read_text() if path.exists() else ""
+                try:
+                    updated = apply_settings(current, request.form)
+                except SettingsError as exc:
+                    flash(f"Not saved — {exc}", "err")
+                    return _render_config(current)
+                saved = _commit_text(updated, "config")
+                if saved is None:
+                    return _render_config(updated)
+                return saved
             text = request.form.get("text", "")
-            created = _ensure_items_csv(text, path)
-            if created:
-                flash(
-                    f"Created {created} with a header row — add your products on "
-                    "the Products tab.",
-                    "ok",
-                )
-            try:
-                _validate_config_text(text, path)
-            except (ConfigError, Exception) as exc:
-                flash(f"Not saved — {exc}", "err")
-                return page(CONFIG, "Config", "config", text=text)
-            if path.exists():
-                path.with_suffix(path.suffix + ".bak").write_text(path.read_text())
-            _atomic_write(path, text)
-            return _finish("config")
-        return page(CONFIG, "Config", "config", text=path.read_text() if path.exists() else "")
+            saved = _commit_text(text, "config")
+            if saved is None:
+                return _render_config(text)
+            return saved
+        current = path.read_text() if path.exists() else ""
+        return _render_config(current)
 
     @app.route("/logs")
     @protected
@@ -861,6 +1392,128 @@ def _row_value(row: dict, candidates) -> str:
         if key in lowered:
             return (row.get(lowered[key]) or "").strip()
     return ""
+
+
+def _parcel_summary(config, receipt: dict | None) -> str:
+    """Label weight for an order: products plus the box that was chosen."""
+    if receipt is None or config is None:
+        return ""
+    try:
+        plan = plan_parcel(receipt, config.labels)
+    except LabelError as exc:
+        return str(exc)
+    except Exception:
+        return ""
+    return (
+        f"{format_ounces(plan.total_oz)} oz in {plan.preset} "
+        f"({format_ounces(plan.item_weight_oz)} product + "
+        f"{format_ounces(plan.packaging_oz)} box)"
+    )
+
+
+def _raw_boxes(labels: dict) -> dict:
+    parcels = labels.get("parcels")
+    if isinstance(parcels, dict) and parcels:
+        return parcels
+    if isinstance(labels.get("parcel"), dict) and labels.get("parcel"):
+        return {"default": labels["parcel"]}
+    return {}
+
+
+def _read_labels_section(path: Path) -> dict | None:
+    """The [labels] table, or None when the file is not TOML."""
+    try:
+        with open(path, "rb") as f:
+            raw = tomllib.load(f)
+    except (OSError, tomllib.TOMLDecodeError):
+        return None
+    labels = raw.get("labels") or {}
+    return labels if isinstance(labels, dict) else {}
+
+
+def _items_csv_path(config_path: Path, labels: dict) -> Path | None:
+    rel = labels.get("items_csv")
+    if not rel:
+        return None
+    return config_path.parent / str(rel)
+
+
+def _merge_product_rows(rows: list[dict], item_parcels: dict, extra_weights: dict) -> list[dict]:
+    """Show the box the loader will actually use.
+
+    ``[labels.item_parcels]`` wins over the CSV parcel column. A SKU that
+    exists only in that table is still a product the dropdown should edit.
+    """
+    item_parcels = item_parcels or {}
+    extra_weights = extra_weights or {}
+    seen = set()
+    for row in rows:
+        seen.add(row["sku"])
+        if row["sku"] in item_parcels:
+            row["parcel"] = str(item_parcels[row["sku"]])
+        if not str(row.get("weight_oz") or "").strip() and row["sku"] in extra_weights:
+            row["weight_oz"] = format_ounces(extra_weights[row["sku"]])
+    for sku, preset in item_parcels.items():
+        if not str(sku).strip() or sku in seen:
+            continue
+        weight = format_ounces(extra_weights[sku]) if sku in extra_weights else ""
+        rows.append({
+            "sku": str(sku),
+            "weight_oz": weight,
+            "parcel": str(preset),
+            "notes": "",
+        })
+    return rows
+
+
+def _annotate_label_preview(rows: list[dict], boxes: dict, default: str) -> None:
+    for row in rows:
+        row["label_oz"] = ""
+        row["label_title"] = ""
+        raw = str(row.get("weight_oz") or "").strip()
+        if not raw:
+            continue
+        try:
+            weight = float(raw)
+        except ValueError:
+            continue
+        name = (row.get("parcel") or "").strip() or default
+        box = boxes.get(name) if name else None
+        if not isinstance(box, dict) or box.get("packaging_oz") is None:
+            continue
+        packaging = float(box["packaging_oz"])
+        row["label_oz"] = f"{format_ounces(weight + packaging)} oz"
+        row["label_title"] = (
+            f"{format_ounces(weight)} oz product + {format_ounces(packaging)} oz {name}"
+        )
+
+
+def _rename_csv_parcels(path: Path, rename: dict[str, str]) -> None:
+    """Point the parcel column at a box that was just renamed."""
+    if not rename or not path.exists():
+        return
+    with open(path, newline="", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        fieldnames = list(reader.fieldnames or [])
+        rows = list(reader)
+    if not fieldnames:
+        return
+    parcel_col = _pick_column({name: 1 for name in fieldnames}, CSV_PARCEL_COLUMNS)
+    if not parcel_col:
+        return
+    changed = False
+    for row in rows:
+        current = (row.get(parcel_col) or "").strip()
+        if current in rename:
+            row[parcel_col] = rename[current]
+            changed = True
+    if not changed:
+        return
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=fieldnames, lineterminator="\n", extrasaction="ignore")
+    writer.writeheader()
+    writer.writerows(rows)
+    _atomic_write(path, buf.getvalue())
 
 
 def _read_items_csv(path: Path) -> list[dict]:

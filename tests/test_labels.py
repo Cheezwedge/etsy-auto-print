@@ -6,6 +6,7 @@ from etsy_auto_print.labels import (
     Labeler,
     build_address_to,
     compute_parcel,
+    plan_parcel,
     pick_rate,
     required_service,
 )
@@ -397,6 +398,94 @@ def test_a_smaller_box_is_never_stepped_into_however_roomy_it_claims_to_be(recei
 def test_max_items_absent_means_no_capacity_limit(receipt):
     cfg = label_config()  # no max_items on the preset
     assert compute_parcel(receipt, cfg)["weight"] == 15.5
+
+
+# The shop's real boxes. clamp is not a rung the small mailer was meant to
+# climb — it is the box for two clamp SKUs — but it is larger than `single`
+# and declares no max_items, so the ladder treats it as able to hold anything.
+OWNER_BOXES = {
+    "single": {"length_in": 8, "width_in": 4, "height_in": 1.5,
+               "packaging_oz": 0.5, "max_items": 1},
+    "multi": {"length_in": 12, "width_in": 8.5, "height_in": 2,
+              "packaging_oz": 1.0, "max_items": 4},
+    "clamp": {"length_in": 6, "width_in": 4, "height_in": 3,
+              "packaging_oz": 1.8},
+}
+
+
+def owner_config(**kw):
+    defaults = dict(
+        parcels=OWNER_BOXES,
+        item_parcels={
+            "TRACK": "single",
+            "Track-Clamp-Small": "clamp",
+            "Track-Clamp-Large": "clamp",
+        },
+        default_parcel="single",
+        item_weights_oz={"TRACK": 2.0, "Track-Clamp-Small": 3.0, "Track-Clamp-Large": 4.5},
+    )
+    defaults.update(kw)
+    return label_config(**defaults)
+
+
+def _order(lines):
+    return {"transactions": [
+        {"title": sku, "sku": sku, "quantity": qty} for sku, qty in lines
+    ]}
+
+
+def test_one_item_adds_that_boxs_empty_weight():
+    plan = plan_parcel(_order([("TRACK", 1)]), owner_config())
+    assert plan.preset == "single"
+    assert plan.item_weight_oz == 2.0
+    assert plan.packaging_oz == 0.5
+    assert plan.total_oz == 2.5
+    assert plan.as_shippo()["weight"] == 2.5
+
+
+def test_a_clamp_sku_adds_the_clamp_box_not_the_default():
+    plan = plan_parcel(_order([("Track-Clamp-Large", 1)]), owner_config())
+    assert plan.preset == "clamp"
+    assert plan.total_oz == 4.5 + 1.8
+
+
+def test_two_of_a_single_item_step_up_and_use_the_stepped_box_weight():
+    # single holds 1. The next larger box by volume is clamp (72 in³), not
+    # multi (204), because clamp has no max_items and so holds 2. The label
+    # weight is the clamp box's 1.8 oz, not single's 0.5 and not multi's 1.0.
+    plan = plan_parcel(_order([("TRACK", 2)]), owner_config())
+    assert plan.preset == "clamp"
+    assert (plan.length_in, plan.width_in, plan.height_in) == (6, 4, 3)
+    assert plan.total_oz == 4.0 + 1.8
+
+
+def test_a_mixed_order_uses_the_largest_mapped_box_and_its_empty_weight():
+    # TRACK maps to single (48 in³), the clamp SKU to clamp (72). The order
+    # ships in clamp. Both products' weights are summed, then clamp's 1.8.
+    plan = plan_parcel(
+        _order([("TRACK", 1), ("Track-Clamp-Small", 1)]), owner_config()
+    )
+    assert plan.preset == "clamp"
+    assert plan.item_weight_oz == 2.0 + 3.0
+    assert plan.total_oz == 5.0 + 1.8
+
+
+def test_a_product_mapped_to_multi_brings_the_multi_box():
+    cfg = owner_config(item_parcels={"TRACK": "single", "PACK": "multi"},
+                       item_weights_oz={"TRACK": 2.0, "PACK": 5.0})
+    plan = plan_parcel(_order([("TRACK", 1), ("PACK", 1)]), cfg)
+    assert plan.preset == "multi"
+    assert plan.packaging_oz == 1.0
+    assert plan.total_oz == 2.0 + 5.0 + 1.0
+
+
+def test_the_shippo_payload_is_only_dimensions_and_total_weight():
+    parcel = compute_parcel(_order([("TRACK", 1)]), owner_config())
+    assert set(parcel) == {
+        "length", "width", "height", "distance_unit", "weight", "mass_unit",
+    }
+    assert parcel["mass_unit"] == "oz"
+    assert parcel["distance_unit"] == "in"
 
 
 def test_capacity_counts_quantities_not_line_items(receipt):

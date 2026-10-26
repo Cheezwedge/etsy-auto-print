@@ -57,7 +57,7 @@ def client(app_dir):
     return create_app(app_dir / "config.toml").test_client()
 
 
-@pytest.mark.parametrize("route", ["/", "/orders", "/items", "/config", "/logs"])
+@pytest.mark.parametrize("route", ["/", "/orders", "/items", "/packaging", "/config", "/logs"])
 def test_pages_render_real_html(client, route):
     resp = client.get(route)
     assert resp.status_code == 200
@@ -71,7 +71,11 @@ def test_pages_render_real_html(client, route):
 def test_products_page_lists_csv_rows_and_offers_parcels(client):
     text = client.get("/items").get_data(as_text=True)
     assert "MUG-1" in text
+    assert '<select name="parcel"' in text
+    assert 'list="parcels"' not in text
     assert 'value="medium"' in text and 'value="small"' in text
+    # 14 oz of mug + the medium box's 3 oz empty weight.
+    assert "17 oz" in text
 
 
 def test_invalid_toml_is_not_saved(client, app_dir):
@@ -313,7 +317,7 @@ def broken_config_client(app_dir):
     return create_app(path).test_client()
 
 
-@pytest.mark.parametrize("route", ["/", "/orders", "/items", "/config", "/logs"])
+@pytest.mark.parametrize("route", ["/", "/orders", "/items", "/packaging", "/config", "/logs"])
 def test_every_page_survives_a_config_that_will_not_load(broken_config_client, route):
     assert broken_config_client.get(route).status_code == 200
 
@@ -754,3 +758,222 @@ def test_a_bad_order_number_is_refused(client, monkeypatch):
     # that the malformed id never reached a command line.
     assert not [cmd for cmd in ran if "mark-shipped" in cmd]
     assert "failed" in resp.get_data(as_text=True)
+
+
+# --- packaging, box dropdown, settings form ---------------------------------
+
+
+def _box_form(text, *, default=None, drop=(), rename=None, add=None):
+    import tomllib
+
+    from etsy_auto_print.config_form import boxes_from_labels, default_parcel_from_labels
+
+    labels = tomllib.loads(text).get("labels", {})
+    rows = [row for row in boxes_from_labels(labels) if row["name"] not in drop]
+    if rename:
+        for row in rows:
+            if row["name"] == rename[0]:
+                row["name"] = rename[1]
+    if add:
+        rows.append({
+            "original": "",
+            "name": add["name"],
+            "length_in": add["length_in"],
+            "width_in": add["width_in"],
+            "height_in": add["height_in"],
+            "packaging_oz": add["packaging_oz"],
+            "max_items": add.get("max_items", ""),
+        })
+    data = {
+        "original_name": [row["original"] for row in rows],
+        "name": [row["name"] for row in rows],
+        "length_in": [row["length_in"] for row in rows],
+        "width_in": [row["width_in"] for row in rows],
+        "height_in": [row["height_in"] for row in rows],
+        "packaging_oz": [row["packaging_oz"] for row in rows],
+        "max_items": [row["max_items"] for row in rows],
+        "default_parcel": default_parcel_from_labels(labels) if default is None else default,
+    }
+    return data
+
+
+def test_packaging_page_lists_the_boxes(client):
+    text = client.get("/packaging").get_data(as_text=True)
+    assert 'value="small"' in text and 'value="medium"' in text
+    assert "Empty oz" in text
+    # medium is the default, and its empty weight is on the form.
+    assert 'name="default_parcel"' in text
+
+
+def test_packaging_save_changes_one_box_and_keeps_the_token(client, app_dir):
+    before = (app_dir / "config.toml").read_text()
+    data = _box_form(before)
+    index = data["name"].index("small")
+    data["packaging_oz"][index] = "2.5"
+    resp = client.post("/packaging", data=data, follow_redirects=True)
+    saved = (app_dir / "config.toml").read_text()
+    assert 'shippo_token = "shippo_test_fake"' in saved
+    assert "packaging_oz = 2.5" in saved
+    assert "[labels.parcels.medium]" in saved
+    assert "what to check now" in resp.get_data(as_text=True).lower()
+    from etsy_auto_print.config import load_config
+    assert load_config(app_dir / "config.toml").labels.parcels["small"]["packaging_oz"] == 2.5
+
+
+def test_packaging_save_and_apply_keeps_the_save_when_restart_fails(client, app_dir):
+    before = (app_dir / "config.toml").read_text()
+    data = _box_form(before)
+    data["apply"] = "1"
+    index = data["name"].index("medium")
+    data["packaging_oz"][index] = "4"
+    resp = client.post("/packaging", data=data, follow_redirects=True)
+    text = resp.get_data(as_text=True)
+    assert "packaging_oz = 4.0" in (app_dir / "config.toml").read_text() or (
+        "packaging_oz = 4" in (app_dir / "config.toml").read_text()
+    )
+    assert "restart failed" in text.lower()
+    assert "Restart is still needed" in text
+
+
+def test_deleting_a_box_a_product_uses_is_refused(client, app_dir):
+    before = (app_dir / "config.toml").read_text()
+    # MUG-1 is mapped to medium. Removing it must not land.
+    data = _box_form(before, drop={"medium"}, default="small")
+    resp = client.post("/packaging", data=data, follow_redirects=True)
+    assert (app_dir / "config.toml").read_text() == before
+    assert "Not saved" in resp.get_data(as_text=True)
+
+
+def test_renaming_a_box_updates_the_product_csv(client, app_dir):
+    (app_dir / "items.csv").write_text("sku,weight_oz,parcel,notes\nMUG-1,14,small,cup\n")
+    before = (app_dir / "config.toml").read_text()
+    data = _box_form(before, rename=("small", "mini"), default="medium")
+    client.post("/packaging", data=data, follow_redirects=True)
+    saved = (app_dir / "config.toml").read_text()
+    assert "[labels.parcels.mini]" in saved
+    assert "[labels.parcels.small]" not in saved
+    assert "MUG-1,14,mini,cup" in (app_dir / "items.csv").read_text()
+    from etsy_auto_print.config import load_config
+    assert load_config(app_dir / "config.toml").labels.item_parcels["MUG-1"] == "mini"
+
+
+def test_a_legacy_single_box_is_not_rewritten_until_a_second_is_added(client, app_dir):
+    text = (app_dir / "config.toml").read_text()
+    # Drop the multi-box tables and the products file's parcel, and use the
+    # old one-box shape. items.csv must not name a box that no longer exists.
+    (app_dir / "items.csv").write_text("sku,weight_oz,parcel,notes\nMUG-1,14,,cup\n")
+    legacy = text.split("[labels.parcels.small]")[0]
+    legacy = legacy.replace('default_parcel = "medium"\n', "")
+    legacy += (
+        "[labels.parcel]\nlength_in = 8\nwidth_in = 4\nheight_in = 1.5\n"
+        "packaging_oz = 0.5\n"
+    )
+    (app_dir / "config.toml").write_text(legacy)
+    page = client.get("/packaging").get_data(as_text=True)
+    assert 'value="default"' in page
+    data = _box_form(legacy)
+    data["height_in"] = ["2"]
+    client.post("/packaging", data=data, follow_redirects=True)
+    saved = (app_dir / "config.toml").read_text()
+    assert "[labels.parcel]" in saved
+    assert "[labels.parcels." not in saved
+    data = _box_form(saved, add={
+        "name": "multi", "length_in": "12", "width_in": "8.5",
+        "height_in": "2", "packaging_oz": "1", "max_items": "4",
+    }, default="default")
+    client.post("/packaging", data=data, follow_redirects=True)
+    saved = (app_dir / "config.toml").read_text()
+    assert "[labels.parcel]\n" not in saved
+    assert "[labels.parcels.default]" in saved
+    assert "[labels.parcels.multi]" in saved
+
+
+def test_products_reject_a_box_that_is_not_defined(client, app_dir):
+    before = (app_dir / "items.csv").read_text()
+    resp = client.post(
+        "/items",
+        data={"sku": ["MUG-1"], "weight_oz": ["14"], "parcel": ["nope"], "notes": [""]},
+        follow_redirects=True,
+    )
+    assert "is not a packaging type" in resp.get_data(as_text=True)
+    assert (app_dir / "items.csv").read_text() == before
+
+
+def test_a_toml_box_mapping_is_shown_and_saved_with_the_dropdown(client, app_dir):
+    path = app_dir / "config.toml"
+    path.write_text(path.read_text() + '\n[labels.item_parcels]\n"MUG-1" = "small"\n')
+    # The CSV says medium. The TOML override wins, so the dropdown shows small.
+    text = client.get("/items").get_data(as_text=True)
+    assert 'value="small" selected' in text or 'value="small" selected="selected"' in text
+    client.post(
+        "/items",
+        data={"sku": ["MUG-1"], "weight_oz": ["14"], "parcel": ["medium"], "notes": ["cup"]},
+        follow_redirects=True,
+    )
+    from etsy_auto_print.config import load_config
+    labels = load_config(path).labels
+    assert labels.item_parcels["MUG-1"] == "medium"
+    assert "MUG-1,14,medium,cup" in (app_dir / "items.csv").read_text()
+
+
+def test_clearing_the_dropdown_removes_the_toml_override(client, app_dir):
+    path = app_dir / "config.toml"
+    path.write_text(path.read_text() + '\n[labels.item_parcels]\n"MUG-1" = "small"\n')
+    client.post(
+        "/items",
+        data={"sku": ["MUG-1"], "weight_oz": ["14"], "parcel": [""], "notes": [""]},
+        follow_redirects=True,
+    )
+    from etsy_auto_print.config import load_config
+    labels = load_config(path).labels
+    assert "MUG-1" not in labels.item_parcels
+    assert labels.default_parcel == "medium"
+
+
+def test_an_order_shows_product_weight_plus_the_box(client, app_dir):
+    from etsy_auto_print.store import Store
+
+    store = Store(app_dir / "orders.db")
+    store.register({
+        "receipt_id": 42,
+        "name": "Pat",
+        "transactions": [{"sku": "MUG-1", "quantity": 2, "title": "Mug"}],
+    })
+    store.close()
+    text = client.get("/orders").get_data(as_text=True)
+    # 14 oz × 2, plus the medium box's 3 oz. No max_items, so it stays medium.
+    assert "31 oz in medium" in text
+    assert "28 product + 3 box" in text
+
+
+def test_settings_form_edits_ship_from_and_keeps_the_token(client, app_dir):
+    from tests.test_config_form import _settings_form
+
+    path = app_dir / "config.toml"
+    path.write_text("# keep this comment\n" + path.read_text())
+    data = _settings_form(path.read_text(), ship_street1="9 New St", file_type="PNG",
+                          label_delay_minutes=45)
+    data["form"] = "settings"
+    resp = client.post("/config", data=data, follow_redirects=True)
+    saved = path.read_text()
+    assert 'shippo_token = "shippo_test_fake"' in saved
+    assert "# keep this comment" in saved
+    assert 'street1 = "9 New St"' in saved
+    assert 'file_type = "PNG"' in saved
+    assert "label_delay_minutes = 45" in saved
+    assert "what to check now" in resp.get_data(as_text=True).lower()
+    # The raw editor is still on the page.
+    assert "<textarea" in client.get("/config").get_data(as_text=True)
+
+
+def test_settings_save_and_apply_still_restarts(client, app_dir):
+    from tests.test_config_form import _settings_form
+
+    path = app_dir / "config.toml"
+    data = _settings_form(path.read_text(), backend="file")
+    data["form"] = "settings"
+    data["apply"] = "1"
+    resp = client.post("/config", data=data, follow_redirects=True)
+    text = resp.get_data(as_text=True)
+    assert "restart failed" in text.lower()
+    assert 'shippo_token = "shippo_test_fake"' in path.read_text()

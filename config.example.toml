@@ -160,6 +160,10 @@ packaging_oz = 3.0
 # instead HOLD any order containing an unmapped SKU (safer).
 # default_item_oz = 8.0
 
+# The dashboard's Packaging tab edits these boxes, and Products picks one
+# per SKU from a dropdown. The tables below are the same data, so a file
+# written by hand keeps working with no migration.
+#
 # --- Option B: multiple box sizes, chosen per order by what's in it.
 # Delete [labels.parcel] above and uncomment this block instead — the two
 # options are mutually exclusive (parcels, if present, wins).
