@@ -152,8 +152,8 @@ That prints a line like `Updated etsy-auto-print to 0.1.0 (abc1234). git rev-par
 `etsy-auto-print dashboard` serves a local web UI — system health checks
 (service, Etsy, Shippo, printer, notifications), an order list with retry
 buttons, a spreadsheet-style product editor (paste rows straight from Excel,
-LibreOffice or Google Sheets), a validated config editor, and
-the service log. It binds to localhost; tunnel in with
+LibreOffice or Google Sheets), a packaging editor for box sizes, a settings
+form plus the raw config file, and the service log. It binds to localhost; tunnel in with
 `ssh -L 8765:localhost:8765 user@host`, or set `[dashboard] password` and
 pass `--host 0.0.0.0` to use it from your network. Needs
 `pip install -e ".[dashboard]"`.
@@ -168,6 +168,57 @@ service (config is read at startup, so changes are inert until then) and
 drops you on Status with a checklist of what to verify. See
 [docs/RASPBERRY_PI.md](docs/RASPBERRY_PI.md) for the one-line sudoers rule
 that lets the restart button work without a password.
+
+### Packaging and product boxes
+
+**Packaging** edits box types: name, length, width, height (inches), empty
+weight in ounces, and how many items fit. That is the same data as
+`[labels.parcels.<name>]`. A file that still has one `[labels.parcel]` block
+keeps that shape until you add a second box. Existing `config.toml` files
+load as they are — nothing has to be migrated by hand.
+
+**Products** picks each SKU's box from those types. Blank means the default
+box (`labels.default_parcel`, also a dropdown on Packaging and on Config).
+The choice is written to the `parcel` column of the products CSV. If
+`[labels.item_parcels]` already names that SKU, it is updated to the same
+choice, because that table wins over the CSV when both are set. Renaming a
+box updates both.
+
+**Label weight** is the sum of each product's weight times quantity, plus the
+empty weight of the one box chosen for the order:
+
+- one product, one box: that product's weight + that box's empty weight
+  (shown as **Label (1)** on Products, and as **LABEL OZ** from
+  `etsy-auto-print products`)
+- a mix of products: the largest of their boxes by volume, then that box's
+  empty weight
+- more items than the box's max: the next larger box that holds the count,
+  and that box's empty weight
+
+A box with no max items has no limit, including as the box a smaller one
+steps up into. The Orders tab shows the total for what was actually ordered
+(`31 oz in medium (28 product + 3 box)`).
+
+### Config settings
+
+The Config tab has fields for the settings that are awkward as raw text, and
+the TOML editor underneath for everything else. Saving either one validates
+the whole file, keeps `config.toml.bak`, and **Save & apply** restarts the
+service the same way it always has.
+
+Fields: label on/off, live postage, label format, carriers, hold-on-unmapped
+upgrade, address validation, when Etsy is told the order shipped (and the
+hour), default box, products filename, the ship-from address, printer
+(file or CUPS, queues, slip format, outbox), poll interval, the config-file
+label delay, OAuth redirect port, stock watch (on/off, threshold, interval),
+order notifications, and whether to ask Etsy for `listings_r`.
+
+Left in the file on purpose: API tokens and the dashboard password, ntfy and
+Pushover credentials, `[labels.service_map]` (free-form upgrade names),
+`paths.db` / `paths.tokens`, `shop_id` (it is discovered for you), and
+`default_item_oz` on a box (kept if you already set it; Packaging does not
+clear it). The label delay saved on the Orders page is stored with your
+orders and still wins over `poll.label_delay_minutes`.
 
 ### Label delay
 
@@ -203,12 +254,15 @@ label_delay_minutes = 30   # used only until the Orders page saves a delay
 
 1. Create a free Shippo account (Starter plan) and copy the **test** API
    token from Settings → API (it starts with `shippo_test_`).
-2. In `config.toml`, set `[labels] enabled = true`, paste the token, fill in
-   your `[labels.ship_from]` address, a box size under `[labels.parcel]`
-   (one box for everything) or multiple named presets under
-   `[labels.parcels.<name>]` + `[labels.item_parcels]` (different box sizes
-   per product — see the comments in `config.example.toml`), and per-SKU
-   weights in `[labels.item_weights_oz]`.
+2. In `config.toml` (or the dashboard's Config, Packaging, and Products
+   tabs), set `[labels] enabled = true`, paste the token, fill in your
+   ship-from address, and define at least one box. One box for everything
+   is `[labels.parcel]`; several boxes are `[labels.parcels.<name>]`, with
+   each SKU pointing at one of them (the Products tab, the CSV `parcel`
+   column, or `[labels.item_parcels]`). Per-SKU weights live on Products
+   or in `[labels.item_weights_oz]`. See the comments in
+   `config.example.toml`. The label weight is the products plus the empty
+   weight of the box that order ships in.
 3. Verify the whole flow with fake labels (free, printable, scannable):
 
 ```bash

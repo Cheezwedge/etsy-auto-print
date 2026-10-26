@@ -15,6 +15,7 @@ and the attempts table records purchases *in flight*, so a crash between
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 
 from .config import normalize_service
 from .printer import Printer, PrintError
@@ -69,7 +70,38 @@ def _holds(box: dict, item_count: int) -> bool:
     return limit is None or limit >= item_count
 
 
-def compute_parcel(receipt: dict, label_config) -> dict:
+@dataclass(frozen=True)
+class ParcelPlan:
+    """The one box an order ships in, and how its label weight was built.
+
+    ``total_oz`` is the product weights plus this box's empty weight. The
+    dict sent to Shippo is ``as_shippo()`` — dimensions and that total, and
+    nothing else.
+    """
+
+    preset: str
+    length_in: float
+    width_in: float
+    height_in: float
+    packaging_oz: float
+    item_weight_oz: float
+
+    @property
+    def total_oz(self) -> float:
+        return self.packaging_oz + self.item_weight_oz
+
+    def as_shippo(self) -> dict:
+        return {
+            "length": self.length_in,
+            "width": self.width_in,
+            "height": self.height_in,
+            "distance_unit": "in",
+            "weight": round(self.total_oz, 2),
+            "mass_unit": "oz",
+        }
+
+
+def plan_parcel(receipt: dict, label_config) -> ParcelPlan:
     """One box per order. Each item is mapped to a parcel preset (by SKU, or
     the shop's default/only preset); if an order mixes items that map to
     different presets, everything ships in the single largest one by volume.
@@ -80,6 +112,10 @@ def compute_parcel(receipt: dict, label_config) -> dict:
     step up to the smallest configured box that does hold that many, and hold
     the order only when nothing does. Never ship a label whose dimensions are
     a lie, but don't hold an order the shop already owns a box for either.
+
+    The empty weight added is always the box that was actually chosen,
+    including after a step-up or a mixed-order promotion — not the box the
+    first SKU mapped to.
     """
     transactions = receipt.get("transactions", [])
     presets_used: set[str] = set()
@@ -133,16 +169,28 @@ def compute_parcel(receipt: dict, label_config) -> dict:
             item_count, outgrown, max_items, chosen,
         )
 
-    total_oz = box["packaging_oz"] + item_weight_total
+    return ParcelPlan(
+        preset=chosen,
+        length_in=box["length_in"],
+        width_in=box["width_in"],
+        height_in=box["height_in"],
+        packaging_oz=box["packaging_oz"],
+        item_weight_oz=item_weight_total,
+    )
 
-    return {
-        "length": box["length_in"],
-        "width": box["width_in"],
-        "height": box["height_in"],
-        "distance_unit": "in",
-        "weight": round(total_oz, 2),
-        "mass_unit": "oz",
-    }
+
+def compute_parcel(receipt: dict, label_config) -> dict:
+    """The Shippo parcel for this order. See plan_parcel for how the box
+    and the weight are chosen."""
+    return plan_parcel(receipt, label_config).as_shippo()
+
+
+def format_ounces(ounces: float) -> str:
+    """A short ounce figure: 17, 1.8, 15.5."""
+    rounded = round(float(ounces), 2)
+    if abs(rounded - round(rounded)) < 1e-9:
+        return str(int(round(rounded)))
+    return f"{rounded:.2f}".rstrip("0").rstrip(".")
 
 
 def _service_names(receipt: dict) -> tuple[set[str], set[str]]:
