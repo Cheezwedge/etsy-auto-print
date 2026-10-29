@@ -116,6 +116,7 @@ etsy-auto-print status      # every order and its state
 etsy-auto-print check       # health-check every connection (exit 1 if broken)
 etsy-auto-print show 123    # details + event history for one order
 etsy-auto-print reprint 123 # re-print a slip (also un-holds a held order)
+etsy-auto-print reprint last # re-print the most recent packing slip
 etsy-auto-print dashboard   # web UI: status, config/products, logs, tests
 etsy-auto-print update      # pull, install, restart the poller and the dashboard
 ```
@@ -151,12 +152,19 @@ That prints a line like `Updated etsy-auto-print to 0.1.0 (abc1234). git rev-par
 
 `etsy-auto-print dashboard` serves a local web UI — system health checks
 (service, Etsy, Shippo, printer, notifications), an order list with retry
-buttons, a spreadsheet-style product editor (paste rows straight from Excel,
-LibreOffice or Google Sheets), a packaging editor for box sizes, a settings
-form plus the raw config file, and the service log. It binds to localhost; tunnel in with
-`ssh -L 8765:localhost:8765 user@host`, or set `[dashboard] password` and
-pass `--host 0.0.0.0` to use it from your network. Needs
-`pip install -e ".[dashboard]"`.
+and reprint buttons, a spreadsheet-style product editor (paste rows straight
+from Excel, LibreOffice or Google Sheets), a packaging editor for box sizes,
+a settings form plus the raw config file, and the service log. It binds to
+localhost; tunnel in with `ssh -L 8765:localhost:8765 user@host`, or set
+`[dashboard] password` and pass `--host 0.0.0.0` to use it from your
+network. Needs `pip install -e ".[dashboard]"`.
+
+On the Orders tab, **Reprint label** is shown only for an order that already
+has a purchased label. It sends that same label to the printer again — the
+same command as `etsy-auto-print reprint-label <id>` — and it never buys
+postage. **Reprint slip** next to it reprints the packing slip. Success and
+failure show in the banner at the top of the page, and the reprint is
+written into the order's history (`etsy-auto-print show <id>`).
 
 On a Linux desktop, `./desktop/install-shortcuts.sh YOURUSER@YOURPI` installs
 three launchers: **Etsy Label Dashboard** (connects, starts the dashboard,
@@ -273,7 +281,8 @@ etsy-auto-print products        # your SKUs, weights and boxes
 etsy-auto-print listings        # do your LIVE listings use those SKUs?
 etsy-auto-print services        # Shippo service tokens for [labels.service_map]
 etsy-auto-print poll            # orders now advance: slip -> label
-etsy-auto-print reprint-label 123
+etsy-auto-print reprint-label 123   # print the purchased label again; buys nothing
+etsy-auto-print reprint-label last  # the most recently purchased or printed label
 etsy-auto-print retry 123       # re-run a held order after fixing the cause
 etsy-auto-print mark-shipped --all  # tell Etsy everything printed has shipped
 etsy-auto-print ship-by         # is Etsy's ship-by date readable on your orders?
@@ -281,6 +290,13 @@ etsy-auto-print track 123       # has USPS scanned this parcel yet?
 etsy-auto-print refund 123      # ask for the postage back on an unused label
 etsy-auto-print print-label FILE  # print a label bought elsewhere (e.g. Etsy)
 ```
+
+`reprint-label` only prints a label that was already bought. `last` is the
+one purchased most recently, or an older one if it was printed again after
+that (a reprint writes a newer event). It prints the order id and the buyer
+name when the order has one. If nothing has been bought yet it exits with
+an error and does not buy a label. `reprint last` is the same idea for the
+packing slip printed most recently.
 
 With the test token everything behaves like production except the labels are
 watermarked and free, and **tracking is never posted to Etsy for a test

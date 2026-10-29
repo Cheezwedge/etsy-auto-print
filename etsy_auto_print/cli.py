@@ -7,6 +7,9 @@
     etsy-auto-print check             health-check every connection
     etsy-auto-print show ID           full detail + event history for one order
     etsy-auto-print reprint ID        re-render + re-print a slip (un-holds)
+    etsy-auto-print reprint last      re-print the most recent packing slip
+    etsy-auto-print reprint-label ID  re-print an already-purchased label
+    etsy-auto-print reprint-label last  the most recently purchased/printed label
     etsy-auto-print test-slip         print a sample slip with fake data
     etsy-auto-print products          configured SKUs, weights and boxes
     etsy-auto-print listings          check live listings against those SKUs
@@ -294,15 +297,64 @@ def cmd_show(config, args) -> int:
     return 0
 
 
+def order_id_or_last(value: str) -> int | str:
+    """An order id, or the word ``last`` for the most recent one."""
+    if value.lower() == "last":
+        return "last"
+    try:
+        return int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"invalid order id {value!r}: expected an integer or 'last'"
+        ) from None
+
+
+def _order_phrase(store: Store, receipt_id: int) -> str:
+    row = store.get(receipt_id)
+    buyer = (row["buyer_name"] or "").strip() if row is not None else ""
+    if buyer:
+        return f"order #{receipt_id} ({buyer})"
+    return f"order #{receipt_id}"
+
+
+def _resolve_last(store: Store, ref: int | str, *, kind: str) -> int | None:
+    """Turn ``last`` into a receipt id. Prints an error and returns None."""
+    if ref != "last":
+        return int(ref)
+    if kind == "label":
+        row = store.latest_label()
+        if row is None:
+            print("No purchased label yet — nothing to reprint.", file=sys.stderr)
+            return None
+    else:
+        row = store.latest_slip()
+        if row is None:
+            print(
+                "No packing slip has been printed yet — nothing to reprint.",
+                file=sys.stderr,
+            )
+            return None
+    return int(row["receipt_id"])
+
+
 def cmd_reprint(config, args) -> int:
     store = Store(config.db_path)
     printer = get_printer(config)
+    receipt_id = _resolve_last(store, args.receipt_id, kind="slip")
+    if receipt_id is None:
+        return 1
     try:
-        destination = reprint(args.receipt_id, store, printer)
+        destination = reprint(receipt_id, store, printer)
     except KeyError as exc:
         print(exc, file=sys.stderr)
         return 1
-    print(f"Reprinted -> {destination}")
+    except PrintError as exc:
+        print(f"Slip reprint failed: {exc}", file=sys.stderr)
+        return 1
+    if args.receipt_id == "last":
+        print(f"Reprinted slip for {_order_phrase(store, receipt_id)} -> {destination}")
+    else:
+        print(f"Reprinted -> {destination}")
     return 0
 
 
@@ -952,16 +1004,21 @@ def cmd_retry(config, args) -> int:
 
 
 def cmd_reprint_label(config, args) -> int:
+    """Re-send an already-purchased label. Never buys postage."""
     store = Store(config.db_path)
     printer = get_printer(config)
     labeler = _build_labeler(config, store, printer)
     if labeler is None:
         print("Labels are not enabled in config.toml.", file=sys.stderr)
         return 1
-    if store.get_label(args.receipt_id) is None:
-        print(f"No purchased label for order #{args.receipt_id}.", file=sys.stderr)
+    receipt_id = _resolve_last(store, args.receipt_id, kind="label")
+    if receipt_id is None:
         return 1
-    labeler._print(args.receipt_id)
+    if store.get_label(receipt_id) is None:
+        print(f"No purchased label for order #{receipt_id}.", file=sys.stderr)
+        return 1
+    destination = labeler._print(receipt_id)
+    print(f"Reprinted label for {_order_phrase(store, receipt_id)} -> {destination}")
     return 0
 
 
@@ -1325,7 +1382,11 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(func=cmd_show)
 
     p = sub.add_parser("reprint", help="re-print a packing slip")
-    p.add_argument("receipt_id", type=int)
+    p.add_argument(
+        "receipt_id",
+        type=order_id_or_last,
+        help="order id, or 'last' for the most recently printed slip",
+    )
     p.set_defaults(func=cmd_reprint)
 
     sub.add_parser("test-slip", help="print a sample slip with fake data").set_defaults(
@@ -1387,8 +1448,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("receipt_id", type=int)
     p.set_defaults(func=cmd_skip)
 
-    p = sub.add_parser("reprint-label", help="re-print an already-purchased label")
-    p.add_argument("receipt_id", type=int)
+    p = sub.add_parser(
+        "reprint-label",
+        help="re-print an already-purchased label (never buys postage)",
+    )
+    p.add_argument(
+        "receipt_id",
+        type=order_id_or_last,
+        help="order id, or 'last' for the most recently purchased or printed label",
+    )
     p.set_defaults(func=cmd_reprint_label)
 
     p = sub.add_parser(

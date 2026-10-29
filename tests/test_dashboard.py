@@ -760,6 +760,104 @@ def test_a_bad_order_number_is_refused(client, monkeypatch):
     assert "failed" in resp.get_data(as_text=True)
 
 
+def test_reprint_buttons_only_where_there_is_something_to_reprint(client, app_dir):
+    import re
+
+    from etsy_auto_print.store import Store
+
+    store = Store(app_dir / "orders.db")
+    store.register({"receipt_id": 100, "name": "No Slip", "transactions": []})
+    store.register({"receipt_id": 200, "name": "Slip Only", "transactions": []})
+    store.transition(200, "slip_printed", "slip -> outbox")
+    store.register({"receipt_id": 300, "name": "Has Label", "transactions": []})
+    for state in ("slip_printed", "label_purchased", "label_printed"):
+        store.transition(300, state, "")
+    store.save_label(
+        300, label_url="https://example.test/300.pdf", carrier="USPS",
+        tracking_number="9400300", is_test=True,
+    )
+    store.close()
+
+    text = client.get("/orders").get_data(as_text=True)
+    labels = re.findall(
+        r'action="/action/reprint-label"[\s\S]*?value="(\d+)"', text
+    )
+    slips = re.findall(r'action="/action/reprint"[\s\S]*?value="(\d+)"', text)
+    assert labels == ["300"]
+    assert set(slips) == {"200", "300"}
+    assert "100" not in slips
+    assert "never buys postage" in text
+    # The button is absent, not a dead control, when there is no label.
+    assert text.count(">Reprint label<") == 1
+
+
+@pytest.mark.parametrize("action,tail", [
+    ("reprint-label", ["reprint-label", "300"]),
+    ("reprint", ["reprint", "300"]),
+])
+def test_reprint_buttons_call_reprint_and_not_a_purchase(client, monkeypatch, action, tail):
+    ran = []
+
+    def fake(cmd, timeout=10):
+        ran.append(list(cmd))
+        return 0, "reprinted"
+
+    monkeypatch.setattr(dashboard.checks, "_run", fake)
+    client.post(f"/action/{action}", data={"receipt_id": "300"})
+    assert ran and ran[-1][-len(tail):] == tail
+    assert not any(
+        part in ("print-now", "retry", "poll")
+        for cmd in ran for part in cmd
+    )
+
+
+def test_reprint_success_is_shown_on_the_orders_page(client, monkeypatch):
+    message = "Reprinted label for order #300 (Has Label) -> outbox/label-300.pdf"
+    monkeypatch.setattr(dashboard.checks, "_run", lambda cmd, timeout=10: (0, message))
+    resp = client.post(
+        "/action/reprint-label",
+        data={"receipt_id": "300"},
+        headers={"Referer": "http://localhost/orders"},
+        follow_redirects=True,
+    )
+    text = resp.get_data(as_text=True)
+    # The arrow is escaped in HTML; the order and destination are what matter.
+    assert "Reprinted label for order #300 (Has Label)" in text
+    assert "outbox/label-300.pdf" in text
+    assert "flash ok" in text
+
+
+def test_reprint_failure_is_shown_on_the_orders_page(client, monkeypatch):
+    monkeypatch.setattr(
+        dashboard.checks, "_run",
+        lambda cmd, timeout=10: (1, "No purchased label for order #300."),
+    )
+    resp = client.post(
+        "/action/reprint-label",
+        data={"receipt_id": "300"},
+        headers={"Referer": "http://localhost/orders"},
+        follow_redirects=True,
+    )
+    text = resp.get_data(as_text=True)
+    assert "reprint-label failed: No purchased label for order #300." in text
+    assert "flash err" in text
+
+
+def test_reprint_refuses_a_bad_order_number(client, monkeypatch):
+    ran = []
+    monkeypatch.setattr(
+        dashboard.checks, "_run",
+        lambda cmd, timeout=10: (ran.append(list(cmd)), (0, ""))[1],
+    )
+    resp = client.post(
+        "/action/reprint-label",
+        data={"receipt_id": "1; rm -rf /"},
+        follow_redirects=True,
+    )
+    assert not [cmd for cmd in ran if "reprint-label" in cmd]
+    assert "failed" in resp.get_data(as_text=True)
+
+
 # --- packaging, box dropdown, settings form ---------------------------------
 
 
