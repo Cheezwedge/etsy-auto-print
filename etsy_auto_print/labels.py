@@ -431,13 +431,28 @@ class Labeler:
             + (" [TEST]" if self.client.is_test else ""),
         )
 
-    def _print(self, rid: int) -> None:
+    def _print(self, rid: int) -> str:
+        """Send the label already saved for this order to the printer.
+
+        Downloads and prints. Never purchases. Returns where it was sent.
+        """
         label = self.store.get_label(rid)
+        if label is None:
+            raise LabelError(f"no purchased label for order #{rid}")
         ext = _EXT_BY_FILE_TYPE.get(self.config.file_type, "pdf")
         try:
             data = self.client.download(label["label_url"])
             destination = self.printer.print_bytes(f"label-{rid}", data, ext)
         except (ShippoError, PrintError) as exc:
             raise LabelError(f"label print failed (already purchased!): {exc}") from exc
-        self.store.transition(rid, "label_printed", f"label -> {destination}")
+        note = f"label -> {destination}"
+        state = self.store.get(rid)["state"]
+        # A finished order must stay finished. Walking it back to
+        # label_printed makes the next poll post tracking to Etsy again.
+        # The event is still recorded, with the same note the first print uses.
+        if state in ("tracking_posted", "done"):
+            self.store.note(rid, note)
+        else:
+            self.store.transition(rid, "label_printed", note)
         log.info("Order #%s: label -> %s", rid, destination)
+        return destination

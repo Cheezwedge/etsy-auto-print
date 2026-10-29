@@ -416,6 +416,51 @@ class Store:
             "SELECT * FROM labels WHERE receipt_id = ?", (receipt_id,)
         ).fetchone()
 
+    def latest_label(self) -> sqlite3.Row | None:
+        """The label most recently purchased, or printed again since then.
+
+        `created_at` is the purchase. A reprint writes an event whose note
+        starts with ``label ->``. Whichever of those is newer wins, so
+        ``reprint-label last`` repeats the label that just came out of the
+        printer rather than a purchase that is merely the newest row.
+        """
+        return self.conn.execute(
+            """
+            SELECT labels.receipt_id AS receipt_id,
+                   orders.buyer_name AS buyer_name
+            FROM labels
+            LEFT JOIN orders ON orders.receipt_id = labels.receipt_id
+            LEFT JOIN (
+                SELECT receipt_id, MAX(at) AS at
+                FROM events
+                WHERE note LIKE 'label ->%'
+                GROUP BY receipt_id
+            ) AS printed ON printed.receipt_id = labels.receipt_id
+            ORDER BY CASE
+                       WHEN IFNULL(printed.at, 0) > labels.created_at THEN printed.at
+                       ELSE labels.created_at
+                     END DESC,
+                     labels.receipt_id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+
+    def latest_slip(self) -> sqlite3.Row | None:
+        """The order whose packing slip was printed most recently."""
+        return self.conn.execute(
+            """
+            SELECT orders.receipt_id AS receipt_id,
+                   orders.buyer_name AS buyer_name
+            FROM events
+            JOIN orders ON orders.receipt_id = events.receipt_id
+            WHERE events.to_state = 'slip_printed'
+              AND orders.receipt_json IS NOT NULL
+              AND orders.receipt_json != ''
+            ORDER BY events.at DESC, events.id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+
     # -- odds and ends ------------------------------------------------------
 
     def set_meta(self, key: str, value: str) -> None:

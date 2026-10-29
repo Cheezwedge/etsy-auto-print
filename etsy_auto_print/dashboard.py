@@ -367,6 +367,19 @@ ORDERS = """
       <td class="muted">{{ r.error or r.ships or r.countdown or '' }}</td>
       <td class="muted">{{ r.parcel or '' }}</td>
       <td>
+        <div class="actions">
+        {% if r.has_label %}
+        <form method="post" action="{{ url_for('action', name='reprint-label') }}">
+          <input type="hidden" name="receipt_id" value="{{ r.receipt_id }}">
+          <button title="Print the label already bought for this order. Does not buy postage.">Reprint label</button>
+        </form>
+        {% endif %}
+        {% if r.can_reprint_slip %}
+        <form method="post" action="{{ url_for('action', name='reprint') }}">
+          <input type="hidden" name="receipt_id" value="{{ r.receipt_id }}">
+          <button title="Print this order's packing slip again.">Reprint slip</button>
+        </form>
+        {% endif %}
         {% if r.ships %}
         <form method="post" action="{{ url_for('action', name='mark-shipped') }}">
           <input type="hidden" name="receipt_id" value="{{ r.receipt_id }}">
@@ -379,10 +392,13 @@ ORDERS = """
           <button>Retry</button>
         </form>
         {% endif %}
+        </div>
       </td>
     </tr>
     {% endfor %}
   </table></div>
+  <p class="muted">Reprint label sends the purchased label to the printer again
+     and never buys postage. Reprint slip prints the packing slip again.</p>
   {% endif %}
 </div>
 
@@ -1010,6 +1026,11 @@ def create_app(config_path: Path, password: str | None = None) -> Flask:
                     "ships": ships,
                     "countdown": countdown,
                     "parcel": _parcel_summary(config, store.get_receipt_json(r["receipt_id"])),
+                    "has_label": store.get_label(r["receipt_id"]) is not None,
+                    "can_reprint_slip": (
+                        bool(r["receipt_json"])
+                        and r["state"] not in ("new", "waiting", "releasing")
+                    ),
                 })
             rows.reverse()
         except Exception as exc:
@@ -1373,7 +1394,13 @@ def create_app(config_path: Path, password: str | None = None) -> Flask:
         try:
             output = _do_action(name, app.config["CONFIG_PATH"], request.form)
             session["output"] = output
-            flash(f"{name}: done", "ok")
+            # Reprint has nothing to show but the one line the CLI prints
+            # (which order, where it went). Put that in the banner so it is
+            # visible without scrolling to the output card.
+            if name in ("reprint-label", "reprint") and output and output != "(no output)":
+                flash(output, "ok")
+            else:
+                flash(f"{name}: done", "ok")
         except Exception as exc:
             flash(f"{name} failed: {exc}", "err")
         return redirect(back)
@@ -1808,10 +1835,12 @@ def _do_action(name: str, config_path: Path, form) -> str:
         if not rid.isdigit():
             raise ValueError("bad receipt id")
         cmd = base + ["retry", rid]
-    elif name in ("print-now", "skip"):
+    elif name in ("print-now", "skip", "reprint-label", "reprint"):
         rid = form.get("receipt_id", "").strip()
         if not rid.isdigit():
             raise ValueError("bad receipt id")
+        # reprint-label / reprint re-send a label or slip that already
+        # exists. They are not print-now or retry, which can buy postage.
         cmd = base + [name, rid]
     elif name == "mark-shipped":
         if form.get("all"):
